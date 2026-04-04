@@ -19,7 +19,7 @@ To add a new algorithm: add a new subclass. Never modify existing ones.
 
 from abc import ABC, abstractmethod
 from datetime import date, timedelta
-from models import PricePoint, MarketEvent, AnomalyPoint
+from models import PricePoint, MarketEvent, AnomalyPoint, EventType
 
 
 class AnomalyDetector(ABC):
@@ -55,7 +55,7 @@ class ThresholdDetector(AnomalyDetector):
 
 
 class ZScoreDetector(AnomalyDetector):
-    """TODO: Flag days where |z-score of daily return| > threshold (default 2.0)."""
+    """Flag days where |z-score of daily return| > threshold (default 2.0)."""
 
     def __init__(self, z_threshold: float = 2.0):
         self.z_threshold = z_threshold
@@ -65,16 +65,16 @@ class ZScoreDetector(AnomalyDetector):
         return f"ZScore(>{self.z_threshold}σ)"
 
     def is_anomaly(self, price: PricePoint, all_prices: list[PricePoint]) -> bool:
-        # import numpy as np
-        # returns = [p.open_to_close_change() for p in all_prices]
-        # mean, std = np.mean(returns), np.std(returns)
-        # if std == 0: return False
-        # return abs((price.open_to_close_change() - mean) / std) > self.z_threshold
-        raise NotImplementedError
+        import numpy as np
+        returns = [p.open_to_close_change() for p in all_prices]
+        mean, std = np.mean(returns), np.std(returns)
+        if std == 0:
+            return False
+        return abs((price.open_to_close_change() - mean) / std) > self.z_threshold
 
 
 class BollingerDetector(AnomalyDetector):
-    """TODO: Flag days where close breaks outside Bollinger Bands (window=20, k=2)."""
+    """Flag days where close breaks outside Bollinger Bands (window=20, k=2)."""
 
     def __init__(self, window: int = 20, k: float = 2.0):
         self.window = window
@@ -85,22 +85,35 @@ class BollingerDetector(AnomalyDetector):
         return f"Bollinger(w={self.window}, k={self.k})"
 
     def is_anomaly(self, price: PricePoint, all_prices: list[PricePoint]) -> bool:
-        raise NotImplementedError
+        import numpy as np
+        idx = next((i for i, p in enumerate(all_prices) if p.date == price.date), None)
+        if idx is None or idx < self.window - 1:
+            return False
+        window_closes = [p.close for p in all_prices[idx - self.window + 1: idx + 1]]
+        mid = np.mean(window_closes)
+        std = np.std(window_closes)
+        if std == 0:
+            return False
+        return price.close < mid - self.k * std or price.close > mid + self.k * std
 
 
 class IQRDetector(AnomalyDetector):
-    """TODO: Flag days where daily return falls outside [Q1 - 1.5*IQR, Q3 + 1.5*IQR]."""
+    """Flag days where daily return falls outside [Q1 - 1.5*IQR, Q3 + 1.5*IQR]."""
 
     @property
     def name(self) -> str:
         return "IQR(1.5)"
 
     def is_anomaly(self, price: PricePoint, all_prices: list[PricePoint]) -> bool:
-        raise NotImplementedError
+        import numpy as np
+        returns = [p.open_to_close_change() for p in all_prices]
+        q1, q3 = np.percentile(returns, 25), np.percentile(returns, 75)
+        iqr = q3 - q1
+        return price.open_to_close_change() < q1 - 1.5 * iqr or price.open_to_close_change() > q3 + 1.5 * iqr
 
 
 class VolumeDetector(AnomalyDetector):
-    """TODO: Flag days where volume > (multiplier × rolling average volume)."""
+    """Flag days where volume > (multiplier × rolling average volume)."""
 
     def __init__(self, window: int = 20, multiplier: float = 2.0):
         self.window = window
@@ -111,7 +124,14 @@ class VolumeDetector(AnomalyDetector):
         return f"Volume(>{self.multiplier}x avg)"
 
     def is_anomaly(self, price: PricePoint, all_prices: list[PricePoint]) -> bool:
-        raise NotImplementedError
+        import numpy as np
+        idx = next((i for i, p in enumerate(all_prices) if p.date == price.date), None)
+        if idx is None or idx < self.window:
+            return False
+        avg_volume = np.mean([p.volume for p in all_prices[idx - self.window: idx]])
+        if avg_volume == 0:
+            return False
+        return price.volume > self.multiplier * avg_volume
 
 
 class FunnelDetector:
@@ -140,13 +160,16 @@ class FunnelDetector:
         self,
         prices: list[PricePoint],
         events: list[MarketEvent],
-        window_days: int = 2,
+        ticker: str | None = None,
+        pre_days: int = 3,
+        post_days: int = 1,
     ) -> list[AnomalyPoint]:
+        prices = sorted(prices, key=lambda p: p.date)
         anomalies = []
         for price in prices:
             triggered = [d for d in self.detectors if d.is_anomaly(price, prices)]
             if len(triggered) >= self.min_triggers:
-                nearby  = _find_nearby_events(price.date, events, window_days)
+                nearby  = _find_nearby_events(price.date, events, pre_days, post_days, ticker)
                 comment = _build_comment(price, triggered, nearby)
                 anomalies.append(AnomalyPoint(
                     price_point=price,
@@ -159,12 +182,80 @@ class FunnelDetector:
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+# Lower number = shown first in related_events list passed to module4.
+_EVENT_PRIORITY: dict[EventType, int] = {
+    EventType.EARNINGS:   1,
+    EventType.REGULATORY: 2,
+    EventType.PRODUCT:    3,
+    EventType.ANALYST:    4,
+    EventType.PERSONNEL:  5,
+    EventType.MACRO:      6,
+    EventType.OTHER:      7,
+}
+
+# Ticker → keywords that must appear in title/description to count as related.
+_TICKER_KEYWORDS: dict[str, list[str]] = {
+    "NVDA":  ["nvidia", "nvda", "jensen huang", "h100", "h20", "blackwell"],
+    "AAPL":  ["apple", "aapl", "tim cook", "iphone", "ipad", "ios", "mac"],
+    "AMZN":  ["amazon", "amzn", "aws", "andy jassy"],
+    "GOOGL": ["google", "googl", "alphabet", "sundar pichai", "gemini", "youtube"],
+    "META":  ["meta", "facebook", "instagram", "whatsapp", "zuckerberg", "llama"],
+    "TSLA":  ["tesla", "tsla", "elon musk", "cybertruck", "optimus"],
+}
+
+
+def _relevance_score(event: MarketEvent, anomaly_date: date) -> float:
+    """
+    Lower score = more relevant = shown first.
+
+    Score = type_base + distance_penalty
+      type_base      : EventType priority (EARNINGS=1 … OTHER=7)
+      distance_penalty: pre-event  days × 0.5  (causal — news before anomaly)
+                        post-event days × 0.8  (reaction — news after anomaly)
+
+    Examples (pre_days=3, post_days=1):
+      EARNINGS  day 0  → 1 + 0.0 = 1.0  ← best possible
+      EARNINGS  day -1 → 1 + 0.5 = 1.5
+      REGULATORY day 0 → 2 + 0.0 = 2.0
+      EARNINGS  day -3 → 1 + 1.5 = 2.5
+      OTHER     day +1 → 7 + 0.8 = 7.8  ← least relevant
+    """
+    days_before = (anomaly_date - event.date).days   # positive = before anomaly
+    type_base   = _EVENT_PRIORITY.get(event.event_type, 7)
+    if days_before >= 0:                              # pre-event (causal)
+        distance_penalty = days_before * 0.5
+    else:                                             # post-event (reaction)
+        distance_penalty = abs(days_before) * 0.8
+    return type_base + distance_penalty
+
+
 def _find_nearby_events(
     anomaly_date: date,
     events: list[MarketEvent],
-    window_days: int,
+    pre_days: int,
+    post_days: int,
+    ticker: str | None = None,
+    top_n: int = 10,
 ) -> list[MarketEvent]:
-    return [e for e in events if abs((e.date - anomaly_date).days) <= window_days]
+    # Asymmetric window: wider look-back (cause) than look-forward (reaction).
+    nearby = [
+        e for e in events
+        if -pre_days <= (e.date - anomaly_date).days <= post_days
+    ]
+    # Ticker keyword filter: keep events that mention the company.
+    if ticker:
+        kws = _TICKER_KEYWORDS.get(ticker.upper(), [])
+        if kws:
+            text_match = [
+                e for e in nearby
+                if any(k in (e.title + " " + e.description).lower() for k in kws)
+            ]
+            # Fall back to unfiltered list if nothing survives (e.g. unknown ticker).
+            if text_match:
+                nearby = text_match
+    # Sort by composite relevance: EventType priority + time-distance penalty.
+    nearby.sort(key=lambda e: _relevance_score(e, anomaly_date))
+    return nearby[:top_n]
 
 
 def _build_comment(

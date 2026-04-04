@@ -10,7 +10,8 @@ from datetime import date
 from models import AnalysisResult
 
 # ── Swap implementations here — nowhere else ──────────────────────────────────
-from module1_data_fetcher    import MockDataFetcher          as DataFetcher
+from module1_data_fetcher    import MockPriceFetcher         as PriceFetcher
+from module1_data_fetcher    import MockNewsFetcher          as NewsFetcher
 from module2_anomaly_detector import ThresholdDetector, FunnelDetector
 from module3_sentiment_lstm  import MockSentimentAnalyzer    as SentimentAnalyzer
 from module3_sentiment_lstm  import MockForecaster           as Forecaster
@@ -23,23 +24,24 @@ def build_pipeline():
     Assemble the pipeline from its components.
     All wiring happens here — modules are unaware of each other.
     """
-    fetcher   = DataFetcher()
+    price_fetcher = PriceFetcher()
+    news_fetcher  = NewsFetcher()
     detector  = FunnelDetector([ThresholdDetector()], min_triggers=1)
     sentiment = SentimentAnalyzer()
     forecaster = Forecaster()
     generator = ReportGenerator(builder=StandardReportBuilder())
-    return fetcher, detector, sentiment, forecaster, generator
+    return price_fetcher, news_fetcher, detector, sentiment, forecaster, generator
 
 
 def run_pipeline(ticker: str, start: date, end: date) -> str:
-    fetcher, detector, sentiment, forecaster, generator = build_pipeline()
+    price_fetcher, news_fetcher, detector, sentiment, forecaster, generator = build_pipeline()
 
     print(f"[1] Fetching data for {ticker}...")
-    prices = fetcher.fetch_prices(ticker, start, end)
-    events = fetcher.fetch_news(ticker, start, end)
+    prices = price_fetcher.fetch_prices(ticker, start, end)
+    events = news_fetcher.fetch_news(ticker, start, end)
 
     print(f"[2] Detecting anomalies across {len(prices)} trading days...")
-    anomalies = detector.detect(prices, events)
+    anomalies = detector.detect(prices, events, ticker=ticker)
     print(f"    Found {len(anomalies)} anomalies.")
 
     print(f"[3] Analysing sentiment and forecasting price...")

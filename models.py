@@ -21,6 +21,7 @@ class EventType(Enum):
     REGULATORY = "REGULATORY"
     MACRO      = "MACRO"
     PRODUCT    = "PRODUCT"
+    PERSONNEL  = "PERSONNEL"   # executive changes: CEO/CFO appointments, resignations
     OTHER      = "OTHER"
 
 
