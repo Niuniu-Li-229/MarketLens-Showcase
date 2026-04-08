@@ -1,0 +1,36 @@
+# Environment variables — never commit API keys
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Generated chart outputs
+*.png
+
+# Data cache — large, regenerated automatically on first run
+data_cache/
+
+# Node / Frontend
+app/frontend/node_modules/
+app/frontend/dist/
+app/frontend/.vite/
+
+# macOS
+.DS_Store
+
+# Claude Code local workspace
+.claude/
+
+# IDE
+.vscode/
+.idea/
