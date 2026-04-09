@@ -3,18 +3,27 @@ Module 2 — Anomaly Detector
 Owner: Person 2
 
 Design: Each detection algorithm is its own class implementing AnomalyDetector.
-The FunnelDetector composes multiple detectors and requires a minimum number
-of them to agree before flagging a day — this is the 4-layer funnel.
+FunnelDetector uses a two-tier strategy:
+
+  Tier 1 — Price layer (fast path):
+    If |close-to-close %| >= price_threshold (default 5%), flag immediately.
+
+  Tier 2 — Funnel (slow path):
+    If Tier 1 does not trigger, run all detectors. Flag if >= min_triggers agree.
 
 To add a new algorithm: add a new subclass. Never modify existing ones.
 
         AnomalyDetector (abstract)
-        ├── ThresholdDetector     ← simple mock, used now
-        ├── ZScoreDetector        ← TODO
-        ├── BollingerDetector     ← TODO
-        ├── IQRDetector           ← TODO
-        ├── VolumeDetector        ← TODO
-        └── FunnelDetector        ← composes the above, main entry point
+        ├── ThresholdDetector          ← simple mock
+        ├── ZScoreDetector             ← close-to-close return z-score
+        ├── BollingerDetector          ← close outside Bollinger Bands
+        ├── VolumeDetector             ← volume spike
+        ├── RSIDetector                ← RSI overbought / oversold
+        ├── MACDDetector               ← MACD / signal-line crossover
+        ├── GapDetector                ← opening gap from prev close
+        ├── IntradayRangeDetector      ← intraday high-low range spike
+        ├── ConsecutiveMoveDetector    ← n consecutive same-direction moves
+        └── FunnelDetector             ← composes the above, main entry point
 """
 
 from abc import ABC, abstractmethod
@@ -66,11 +75,18 @@ class ZScoreDetector(AnomalyDetector):
 
     def is_anomaly(self, price: PricePoint, all_prices: list[PricePoint]) -> bool:
         import numpy as np
-        returns = [p.open_to_close_change() for p in all_prices]
+        idx = next((i for i, p in enumerate(all_prices) if p.date == price.date), None)
+        if idx is None or idx == 0:
+            return False
+        returns = [
+            all_prices[i].close_to_close_change(all_prices[i - 1].close)
+            for i in range(1, len(all_prices))
+        ]
+        today_return = price.close_to_close_change(all_prices[idx - 1].close)
         mean, std = np.mean(returns), np.std(returns)
         if std == 0:
             return False
-        return abs((price.open_to_close_change() - mean) / std) > self.z_threshold
+        return abs((today_return - mean) / std) > self.z_threshold
 
 
 class BollingerDetector(AnomalyDetector):
@@ -97,20 +113,6 @@ class BollingerDetector(AnomalyDetector):
         return price.close < mid - self.k * std or price.close > mid + self.k * std
 
 
-class IQRDetector(AnomalyDetector):
-    """Flag days where daily return falls outside [Q1 - 1.5*IQR, Q3 + 1.5*IQR]."""
-
-    @property
-    def name(self) -> str:
-        return "IQR(1.5)"
-
-    def is_anomaly(self, price: PricePoint, all_prices: list[PricePoint]) -> bool:
-        import numpy as np
-        returns = [p.open_to_close_change() for p in all_prices]
-        q1, q3 = np.percentile(returns, 25), np.percentile(returns, 75)
-        iqr = q3 - q1
-        return price.open_to_close_change() < q1 - 1.5 * iqr or price.open_to_close_change() > q3 + 1.5 * iqr
-
 
 class VolumeDetector(AnomalyDetector):
     """Flag days where volume > (multiplier × rolling average volume)."""
@@ -134,25 +136,191 @@ class VolumeDetector(AnomalyDetector):
         return price.volume > self.multiplier * avg_volume
 
 
+class RSIDetector(AnomalyDetector):
+    """
+    Flag days where RSI is overbought (> overbought) or oversold (< oversold).
+    Uses standard Wilder smoothing over `period` close-to-close moves.
+    Default thresholds: RSI > 70 or RSI < 30.
+    """
+
+    def __init__(self, period: int = 14, overbought: float = 70, oversold: float = 30):
+        self.period     = period
+        self.overbought = overbought
+        self.oversold   = oversold
+
+    @property
+    def name(self) -> str:
+        return f"RSI(p={self.period}, ob={self.overbought}, os={self.oversold})"
+
+    def is_anomaly(self, price: PricePoint, all_prices: list[PricePoint]) -> bool:
+        idx = next((i for i, p in enumerate(all_prices) if p.date == price.date), None)
+        if idx is None or idx < self.period:
+            return False
+        closes = [p.close for p in all_prices[idx - self.period: idx + 1]]
+        deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+        gains  = sum(d for d in deltas if d > 0)
+        losses = sum(abs(d) for d in deltas if d < 0)
+        avg_gain = gains  / self.period
+        avg_loss = losses / self.period
+        if avg_loss == 0:
+            return avg_gain > 0   # RSI = 100, overbought
+        rs  = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        return rsi > self.overbought or rsi < self.oversold
+
+
+
+class MACDDetector(AnomalyDetector):
+    """
+    Flag days where the MACD line crosses the signal line (momentum reversal).
+    MACD  = EMA(fast) - EMA(slow)
+    Signal = EMA(signal_period) of MACD
+    A crossover (sign change in MACD - Signal) indicates a trend shift.
+    """
+
+    def __init__(self, fast: int = 12, slow: int = 26, signal: int = 9):
+        self.fast   = fast
+        self.slow   = slow
+        self.signal = signal
+
+    @property
+    def name(self) -> str:
+        return f"MACD({self.fast},{self.slow},{self.signal})"
+
+    @staticmethod
+    def _ema(values: list[float], period: int) -> list[float]:
+        k   = 2.0 / (period + 1)
+        ema = [values[0]]
+        for v in values[1:]:
+            ema.append(v * k + ema[-1] * (1 - k))
+        return ema
+
+    def is_anomaly(self, price: PricePoint, all_prices: list[PricePoint]) -> bool:
+        idx = next((i for i, p in enumerate(all_prices) if p.date == price.date), None)
+        # Need slow + signal + 1 days minimum to compute two consecutive diff values.
+        if idx is None or idx < self.slow + self.signal:
+            return False
+        closes    = [p.close for p in all_prices[: idx + 1]]
+        ema_fast  = self._ema(closes, self.fast)
+        ema_slow  = self._ema(closes, self.slow)
+        macd_line = [f - s for f, s in zip(ema_fast, ema_slow)]
+        # Align signal computation to where slow EMA has stabilised.
+        sig_line  = self._ema(macd_line[self.slow - 1:], self.signal)
+        macd_trim = macd_line[self.slow - 1:]
+        if len(sig_line) < 2:
+            return False
+        diff_now  = macd_trim[-1] - sig_line[-1]
+        diff_prev = macd_trim[-2] - sig_line[-2]
+        # Crossover = sign changed between yesterday and today.
+        return (diff_now > 0) != (diff_prev > 0)
+
+
+class GapDetector(AnomalyDetector):
+    """
+    Flag days where the opening gap from the previous close exceeds a threshold.
+    Gap = |today.open - yesterday.close| / yesterday.close × 100.
+    Captures pre-market news effects (earnings releases, overnight announcements).
+    Default threshold: 2.0%.
+    """
+
+    def __init__(self, threshold: float = 2.0):
+        self.threshold = threshold
+
+    @property
+    def name(self) -> str:
+        return f"Gap(>{self.threshold}%)"
+
+    def is_anomaly(self, price: PricePoint, all_prices: list[PricePoint]) -> bool:
+        idx = next((i for i, p in enumerate(all_prices) if p.date == price.date), None)
+        if idx is None or idx == 0:
+            return False
+        prev_close = all_prices[idx - 1].close
+        gap_pct = abs(price.open - prev_close) / prev_close * 100.0
+        return gap_pct >= self.threshold
+
+
+class IntradayRangeDetector(AnomalyDetector):
+    """
+    Flag days where intraday range (high - low) / close is unusually large
+    compared to the rolling average. Captures days with extreme intraday
+    volatility that may not show up in open-to-close or close-to-close returns.
+    Default: today's range > 2× rolling 20-day average.
+    """
+
+    def __init__(self, window: int = 20, multiplier: float = 2.0):
+        self.window     = window
+        self.multiplier = multiplier
+
+    @property
+    def name(self) -> str:
+        return f"IntradayRange(w={self.window}, >{self.multiplier}x)"
+
+    def is_anomaly(self, price: PricePoint, all_prices: list[PricePoint]) -> bool:
+        idx = next((i for i, p in enumerate(all_prices) if p.date == price.date), None)
+        if idx is None or idx < self.window:
+            return False
+        avg_range = sum(
+            (p.high - p.low) / p.close
+            for p in all_prices[idx - self.window: idx]
+        ) / self.window
+        if avg_range == 0:
+            return False
+        today_range = (price.high - price.low) / price.close
+        return today_range > self.multiplier * avg_range
+
+
+class ConsecutiveMoveDetector(AnomalyDetector):
+    """
+    Flag the last day of a run where price has moved in the same direction
+    for n consecutive days, each move >= min_pct.
+    Detects sustained trend anomalies that single-day detectors miss.
+    Default: 3 consecutive days each moving >= 1.0% in the same direction.
+    """
+
+    def __init__(self, n: int = 3, min_pct: float = 1.0):
+        self.n       = n
+        self.min_pct = min_pct
+
+    @property
+    def name(self) -> str:
+        return f"ConsecutiveMove(n={self.n}, >{self.min_pct}%/day)"
+
+    def is_anomaly(self, price: PricePoint, all_prices: list[PricePoint]) -> bool:
+        idx = next((i for i, p in enumerate(all_prices) if p.date == price.date), None)
+        if idx is None or idx < self.n:
+            return False
+        changes = [
+            all_prices[i].close_to_close_change(all_prices[i - 1].close)
+            for i in range(idx - self.n + 1, idx + 1)
+        ]
+        if not all(abs(c) >= self.min_pct for c in changes):
+            return False
+        return all(c > 0 for c in changes) or all(c < 0 for c in changes)
+
+
 class FunnelDetector:
     """
-    Composes multiple AnomalyDetectors and flags a day as anomalous
-    only if at least `min_triggers` detectors agree.
+    Composes multiple AnomalyDetectors using a two-tier strategy.
     This is the main entry point for Module 2.
+
+    Tier 1 — Price layer (fast path):
+        If |close-to-close %| >= price_threshold, flag immediately.
+
+    Tier 2 — Funnel (slow path):
+        If Tier 1 does not trigger, run all detectors. Flag only if
+        >= min_triggers detectors agree (default: 2).
 
     Usage (mock):
         detector = FunnelDetector([ThresholdDetector()], min_triggers=1)
 
-    Usage (full 4-layer funnel):
+    Usage (full 7-layer funnel):
         detector = FunnelDetector([
-            ZScoreDetector(),
-            BollingerDetector(),
-            IQRDetector(),
-            VolumeDetector(),
+            ZScoreDetector(), BollingerDetector(), IQRDetector(),
+            VolumeDetector(), RSIDetector(), ATRDetector(), MACDDetector(),
         ], min_triggers=2)
     """
 
-    def __init__(self, detectors: list[AnomalyDetector], min_triggers: int = 1):
+    def __init__(self, detectors: list[AnomalyDetector], min_triggers: int = 2):
         self.detectors    = detectors
         self.min_triggers = min_triggers
 
@@ -163,17 +331,46 @@ class FunnelDetector:
         ticker: str | None = None,
         pre_days: int = 3,
         post_days: int = 1,
+        price_threshold: float = 5.0,
     ) -> list[AnomalyPoint]:
+        """
+        Two-tier anomaly detection:
+
+        Tier 1 — Price layer (fast path):
+            If |close-to-close %| >= price_threshold, flag immediately.
+            No funnel required — raw price movement is sufficient evidence.
+
+        Tier 2 — Funnel (slow path):
+            If the price move is not large enough on its own, fall through to
+            the funnel. Flag only if >= self.min_triggers detectors agree.
+        """
         prices = sorted(prices, key=lambda p: p.date)
         anomalies = []
-        for price in prices:
+        for i, price in enumerate(prices):
+            if i == 0:
+                continue  # need a previous close to compute close-to-close change
+            pct_change = price.close_to_close_change(prices[i - 1].close)
+
+            # ── Tier 1: direct price-level anomaly ────────────────────────────
+            if abs(pct_change) >= price_threshold:
+                nearby  = _find_nearby_events(price.date, events, pre_days, post_days, ticker)
+                comment = _build_comment(price, pct_change, [], nearby)
+                anomalies.append(AnomalyPoint(
+                    price_point=price,
+                    percent_change=pct_change,
+                    related_events=nearby,
+                    comment=comment,
+                ))
+                continue
+
+            # ── Tier 2: funnel fallback (min_triggers detectors must agree) ───
             triggered = [d for d in self.detectors if d.is_anomaly(price, prices)]
             if len(triggered) >= self.min_triggers:
                 nearby  = _find_nearby_events(price.date, events, pre_days, post_days, ticker)
-                comment = _build_comment(price, triggered, nearby)
+                comment = _build_comment(price, pct_change, triggered, nearby)
                 anomalies.append(AnomalyPoint(
                     price_point=price,
-                    percent_change=price.open_to_close_change(),
+                    percent_change=pct_change,
                     related_events=nearby,
                     comment=comment,
                 ))
@@ -260,13 +457,14 @@ def _find_nearby_events(
 
 def _build_comment(
     price: PricePoint,
+    pct_change: float,
     triggered: list[AnomalyDetector],
     events: list[MarketEvent],
 ) -> str:
-    direction   = "surged" if price.open_to_close_change() > 0 else "dropped"
-    layer_names = ", ".join(d.name for d in triggered)
+    direction   = "surged" if pct_change > 0 else "dropped"
+    layer_names = "PriceLayer" if not triggered else ", ".join(d.name for d in triggered)
     sources     = ", ".join(e.title for e in events) if events else "no related news"
     return (
-        f"Price {direction} {abs(price.open_to_close_change()):.2f}% on {price.date}. "
+        f"Price {direction} {abs(pct_change):.2f}% on {price.date} (close-to-close). "
         f"Triggered by: {layer_names}. Related events: {sources}."
     )

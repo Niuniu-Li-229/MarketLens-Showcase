@@ -48,6 +48,10 @@ class PricePoint:
     def open_to_close_change(self) -> float:
         return (self.close - self.open) / self.open * 100.0
 
+    def close_to_close_change(self, prev_close: float) -> float:
+        """Percent change from previous day's close to today's close."""
+        return (self.close - prev_close) / prev_close * 100.0
+
     def __str__(self):
         return (f"[Price] {self.date}  close={self.close:.2f}"
                 f"  range={self.daily_range():.2f}  vol={self.volume:,}")

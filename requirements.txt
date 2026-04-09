@@ -1,0 +1,10 @@
+anthropic
+yfinance
+requests
+python-dotenv
+numpy
+transformers
+torch
+scikit-learn
+openai
+matplotlib
