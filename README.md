@@ -63,6 +63,8 @@ MarketLens-Showcase/
 
 ## Setup
 
+> **All commands below are run from the project root (`MarketLens-Showcase/`) unless a `cd` step says otherwise.**
+
 ### Prerequisites
 
 - Python 3.11+
@@ -84,9 +86,6 @@ ANTHROPIC_API_KEY=your_anthropic_key_here
 
 # Required for Module 1 news fetching (free tier works)
 FINNHUB_API_KEY=your_finnhub_key_here
-
-# Optional — only needed if running main_pipeline.py directly
-OPENAI_API_KEY=your_openai_key_here
 ```
 
 > **Both keys are optional for basic use.**
@@ -100,6 +99,7 @@ OPENAI_API_KEY=your_openai_key_here
 ```bash
 cd app/backend
 pip install -r requirements.txt
+cd ../..
 ```
 
 > **Note:** `torch` and `transformers` are large packages (~2 GB). If you only want to run Stage 1 and Stage 3 (price/anomaly/report, no Transformer forecast), you can skip them — the app degrades gracefully.
@@ -109,13 +109,14 @@ pip install -r requirements.txt
 ```bash
 cd app/frontend
 npm install
+cd ../..
 ```
 
 ---
 
 ## Running the web app
 
-Open **two terminals**:
+Open **two terminals**, both starting from the project root (`MarketLens-Showcase/`):
 
 **Terminal 1 — Backend**
 ```bash
@@ -128,6 +129,13 @@ You should see:
 INFO: Uvicorn running on http://127.0.0.1:8000
 INFO: Application startup complete.
 ```
+
+> **Common mistakes:**
+> - Running `uvicorn api:app` from the project root instead of `app/backend/` will fail with "Could not import module api". Make sure you `cd app/backend` first.
+> - If you see "Address already in use", a previous server is still running on port 8000. Kill it first:
+>   ```bash
+>   lsof -ti :8000 | xargs kill -9
+>   ```
 
 **Terminal 2 — Frontend**
 ```bash
