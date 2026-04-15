@@ -19,7 +19,10 @@ from models import AnalysisResult
 
 # ── 当前模式：真实数据 ─────────────────────────────────────────────────────────
 from module1_data_fetcher     import YFinancePriceFetcher   as PriceFetcher
-from module1_data_fetcher     import FinnhubNewsFetcher     as NewsFetcher
+from module1_data_fetcher     import (
+    FinnhubNewsFetcher, AlphaVantageNewsFetcher,
+    YFinanceEventsFetcher, KnownEventsFetcher, CompositeNewsFetcher,
+)
 from module2_anomaly_detector import (
     FunnelDetector,
     ZScoreDetector, BollingerDetector, VolumeDetector,
@@ -48,7 +51,17 @@ from module5_visualizer       import generate_all_charts
 
 def build_pipeline():
     price_fetcher = PriceFetcher()
-    news_fetcher  = NewsFetcher()
+    # Composite news: Alpha Vantage + Finnhub + YFinance + Known (curated)
+    fetchers = [YFinanceEventsFetcher(), KnownEventsFetcher()]
+    try:
+        fetchers.insert(0, AlphaVantageNewsFetcher())
+    except Exception:
+        pass  # Alpha Vantage key not set
+    try:
+        fetchers.insert(0, FinnhubNewsFetcher())
+    except Exception as e:
+        print(f"[News] Finnhub unavailable ({e}), using YFinance + curated events")
+    news_fetcher = CompositeNewsFetcher(fetchers)
     detector      = FunnelDetector([
         ZScoreDetector(),
         BollingerDetector(),
