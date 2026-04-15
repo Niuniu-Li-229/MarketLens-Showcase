@@ -7,10 +7,15 @@ Module 1 — Data Fetcher
 
         NewsFetcher (abstract)
         ├── MockNewsFetcher         ← testing / demo
-        └── FinnhubNewsFetcher      ← real: Finnhub API + CSV cache
+        ├── FinnhubNewsFetcher      ← real: Finnhub API + CSV cache
+        ├── AlphaVantageNewsFetcher ← real: Alpha Vantage NEWS_SENTIMENT API
+        ├── YFinanceEventsFetcher   ← real: yfinance earnings/splits/dividends
+        ├── KnownEventsFetcher      ← curated major historical events
+        └── CompositeNewsFetcher    ← merges multiple fetchers
 """
 
 import csv
+import json
 import os
 import time
 import logging
@@ -73,6 +78,12 @@ class DataCache:
     def _news_path(self, ticker: str) -> Path:
         return self.cache_dir / f"{ticker.upper()}_news.csv"
 
+    _NEWS_COLUMNS = [
+        "date", "title", "description", "source", "event_type",
+        "reported_eps", "beat_expectations",
+        "url", "sentiment_score", "relevance_score",
+    ]
+
     def load_news(self, ticker: str) -> list[MarketEvent]:
         path = self._news_path(ticker)
         if not path.exists():
@@ -82,23 +93,34 @@ class DataCache:
             for row in csv.DictReader(f):
                 try:
                     event_type = EventType(row["event_type"])
+                    # Parse optional fields (backward-compatible with old CSVs)
+                    url = row.get("url") or None
+                    sent = row.get("sentiment_score")
+                    sentiment = float(sent) if sent else None
+                    rel = row.get("relevance_score")
+                    relevance = float(rel) if rel else None
+
                     if event_type == EventType.EARNINGS and "reported_eps" in row:
-                        events.append(EarningsEvent(
+                        ev = EarningsEvent(
                             date             = date.fromisoformat(row["date"]),
                             title            = row["title"],
                             description      = row["description"],
                             source           = row["source"],
                             reported_eps     = float(row["reported_eps"] or 0.0),
                             beat_expectations= row["beat_expectations"] == "True",
-                        ))
+                        )
                     else:
-                        events.append(MarketEvent(
+                        ev = MarketEvent(
                             date       = date.fromisoformat(row["date"]),
                             title      = row["title"],
                             description= row["description"],
                             source     = row["source"],
                             event_type = event_type,
-                        ))
+                        )
+                    ev.url = url
+                    ev.sentiment_score = sentiment
+                    ev.relevance_score = relevance
+                    events.append(ev)
                 except (ValueError, KeyError) as e:
                     logger.warning("Skipping cached news row: %s", e)
         return events
@@ -110,15 +132,20 @@ class DataCache:
         merged = sorted(existing.values(), key=lambda e: e.date)
         with open(self._news_path(ticker), "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["date", "title", "description", "source",
-                             "event_type", "reported_eps", "beat_expectations"])
+            writer.writerow(self._NEWS_COLUMNS)
             for e in merged:
                 if isinstance(e, EarningsEvent):
-                    writer.writerow([e.date, e.title, e.description, e.source,
-                                     e.event_type.value, e.reported_eps, e.beat_expectations])
+                    writer.writerow([
+                        e.date, e.title, e.description, e.source,
+                        e.event_type.value, e.reported_eps, e.beat_expectations,
+                        e.url or "", e.sentiment_score or "", e.relevance_score or "",
+                    ])
                 else:
-                    writer.writerow([e.date, e.title, e.description, e.source,
-                                     e.event_type.value, "", ""])
+                    writer.writerow([
+                        e.date, e.title, e.description, e.source,
+                        e.event_type.value, "", "",
+                        e.url or "", e.sentiment_score or "", e.relevance_score or "",
+                    ])
         logger.info("Cached %d news rows for %s", len(merged), ticker)
 
 
@@ -248,37 +275,216 @@ _EVENT_KEYWORDS: dict[EventType, list[str]] = {
         "beat estimates", "miss estimates", "beat expectations", "guidance",
         "gross margin", "net income", "quarterly", "fiscal year",
         "q1 ", "q2 ", "q3 ", "q4 ",
+        # expanded: financial reporting
+        "eps", "earnings per share", "operating income", "ebitda",
+        "revenue growth", "top line", "bottom line", "reported results",
+        "earnings call", "earnings report", "earnings surprise",
+        "sales growth", "profit margin", "operating margin",
+        "fiscal quarter", "annual results", "full-year results",
+        "home run results", "blowout quarter", "record quarter",
+        "beats wall street", "tops estimates", "falls short",
+        "revenue miss", "profit warning", "results top",
     ],
     EventType.ANALYST: [
         "analyst", "upgrade", "downgrade", "price target", "rating",
         "overweight", "underweight", "outperform", "underperform",
         "initiates coverage", "raises target", "cuts target",
+        # expanded: wall street actions
+        "raises pt", "cuts pt", "lowers pt", "boosts pt",
+        "raises price target", "cuts price target", "lowers price target",
+        "buy rating", "sell rating", "hold rating", "neutral rating",
+        "strong buy", "market perform", "sector perform",
+        "top pick", "top stock", "best stock", "favorite stock",
+        "conviction list", "focus list",
+        "bull case", "bear case", "base case",
+        "reiterates", "maintains rating", "reaffirms",
+        "wall street", "broker", "brokerage",
+        "morgan stanley", "goldman sachs", "jpmorgan", "bofa",
+        "bank of america", "citigroup", "citi ", "barclays",
+        "wells fargo", "ubs ", "deutsche bank", "credit suisse",
+        "jefferies", "piper sandler", "bernstein", "mizuho",
+        "needham", "wedbush", "rbc ", "td cowen", "cowen",
+        "oppenheimer", "stifel", "canaccord", "loop capital",
+        "keybanc", "evercore", "wolfe research", "truist",
+        "raymond james", "susquehanna", "rosenblatt",
+    ],
+    EventType.LEGAL: [
+        # lawsuits, court proceedings, settlements
+        "lawsuit", "sued", "sues", "suing", "litigation",
+        "court ruling", "court order", "court case", "courtroom",
+        "trial", "verdict", "settlement", "settles",
+        "judge", "jury", "plaintiff", "defendant",
+        "injunction", "damages", "class action", "class-action",
+        "patent infringement", "patent dispute", "ip dispute",
+        "copyright", "trademark", "trade secret",
+        "appeals court", "supreme court", "federal court",
+        "ftc case", "doj case",
+        "consent decree", "plea", "indictment",
+        "legal action", "legal battle", "legal challenge",
+        "break up", "break-up", "breakup", "divestiture",
+        "forced to sell", "force sale", "must sell",
+        # expanded: investigations, law firms
+        "law firm investigates", "investigates claims",
+        "on behalf of investors", "securities fraud",
+        "legal siege", "legal threat",
     ],
     EventType.REGULATORY: [
-        "sec", "regulation", "fda", "antitrust", "lawsuit", "compliance",
+        "sec ", "regulation", "fda", "compliance",
         "export control", "export ban", "chip ban", "sanction", "chips act",
+        # expanded: government & regulatory actions
+        "antitrust", "monopoly", "anti-competitive",
+        "ftc ", "doj ", "eu commission", "european commission",
+        "data privacy", "gdpr", "privacy law", "privacy regulation",
+        "content moderation", "section 230",
+        "congressional hearing", "senate hearing", "subpoena",
+        "regulatory scrutiny", "regulatory probe", "regulatory review",
+        "fine ", "fined", "penalty", "penalized",
+        "ban ", "banned", "bans ", "blocking",
+        "censorship", "restrict", "restriction",
+        "investigation", "investigated", "probe",
+        "digital markets act", "digital services act",
+        "competition authority", "watchdog",
+        "tax probe", "tax ruling", "digital tax",
+        # expanded: testimony, whistleblower
+        "whistleblower", "testifies", "testimony",
+        "congressional", "senate ",
     ],
     EventType.MACRO: [
-        "fed", "interest rate", "inflation", "recession", "gdp",
+        "fed ", "interest rate", "inflation", "recession", "gdp",
         "unemployment", "tariff", "trade war", "rate hike", "rate cut",
         "treasury yield", "sell-off",
+        # expanded: broad market & economic events
+        "federal reserve", "fomc", "monetary policy",
+        "bond yield", "yield curve", "inverted yield",
+        "jobs report", "nonfarm payroll", "consumer confidence",
+        "cpi ", "ppi ", "consumer price", "producer price",
+        "economic slowdown", "economic growth", "soft landing",
+        "trade tension", "trade deal", "trade policy",
+        "tariff exemption", "tariff war", "reciprocal tariff",
+        "geopolitical", "war ", "conflict",
+        "oil price", "crude oil", "opec",
+        "china trade", "china economy", "china tariff",
+        "market crash", "market correction", "bear market",
+        "market rally", "broad market", "risk-off", "risk off",
+        "global sell-off", "global selloff", "market selloff",
+        "market rout", "tech rout", "nasdaq drop", "s&p drop",
+        "debt ceiling", "government shutdown",
+        "supply chain", "chip shortage",
+        "currency", "dollar strength", "dollar weakness",
+    ],
+    EventType.AI_TECH: [
+        # AI strategy, model releases, data centers, chips
+        "artificial intelligence", "ai model", "ai training",
+        "large language model", "llm ", "generative ai", "gen ai",
+        "machine learning", "deep learning", "neural network",
+        "chatbot", "chatgpt", "copilot",
+        "ai agent", "ai assistant", "ai tool",
+        "ai chip", "ai gpu", "ai accelerator",
+        "data center", "datacenter", "hyperscale",
+        "ai infrastructure", "compute capacity",
+        "ai investment", "ai spending", "ai capex",
+        "ai strategy", "ai roadmap", "ai pivot",
+        "open source ai", "open-source ai",
+        "ai safety", "ai regulation", "ai governance",
+        "ai revenue", "ai monetization",
+        "training data", "ai training data",
+        "superintelligence", "agi ",
+        # specific model/product names
+        "llama ", "llama-", "gpt-", "gemini ai",
+        "stable diffusion", "midjourney",
+        "transformer model", "foundation model",
+        "ai supercomputer", "gpu cluster",
+        "nvidia h100", "nvidia b100", "nvidia h20",
+        "tensor processing", "tpu ",
+        # expanded: AI industry terms
+        "ai arms race", "ai push", "ai race",
+        "ai recruiting", "ai talent", "ai team",
+        "ai hype", "ai boom", "ai bubble",
+        "ai stock", "ai trade", "ai winner",
+        "ai disruption", "ai replace",
     ],
     EventType.PRODUCT: [
-        "launch", "product", "release", "unveil", "announce", "partnership",
+        "launch", "release", "unveil", "announce", "partnership",
         "acquisition", "acquires", "merger", "funding round",
+        # expanded: products, features, deals
+        "product", "new feature", "introduces", "rolls out",
+        "debuts", "ships", "available now", "coming soon",
+        "beta test", "early access", "preview",
+        "app update", "software update", "platform update",
+        "smart glasses", "ray-ban", "headset", "vr ", "ar ",
+        "quest ", "oculus", "reality labs",
+        "metaverse", "virtual reality", "augmented reality",
+        "mixed reality", "spatial computing",
+        "instagram feature", "whatsapp feature", "facebook feature",
+        "threads app", "reels ", "stories ",
+        "ads platform", "advertising", "ad revenue",
+        "new service", "new platform", "new tool",
+        "deal ", "signed deal", "contract",
+        "strategic investment", "invests in", "investment in",
+        "joint venture", "collaboration", "alliance",
+        "subscriber", "monthly active user", "daily active user",
+        "user growth", "users milestone", "billion users",
+        "expansion", "expands into", "enters market",
+        "supply agreement", "licensing deal", "content deal",
+        "hardware", "device", "wearable",
+        # expanded: service events, rebranding
+        "outage", "service disruption", "went down",
+        "rebrand", "rebrands", "renamed", "rename",
+        "pivot", "pivoting", "new name",
     ],
     EventType.PERSONNEL: [
         "ceo", "cfo", "coo", "cto", "appointed", "resigns", "resignation",
         "steps down", "named as", "new chief", "new president",
+        # expanded: executive and board changes
+        "executive", "board member", "board of directors",
+        "director joins", "director leaves", "new director",
+        "chairman", "vice president", "vp ",
+        "hire", "hired", "hiring", "fires", "fired", "firing",
+        "layoff", "layoffs", "job cuts", "cuts jobs",
+        "restructuring", "reorganization", "reorg",
+        "workforce reduction", "headcount",
+        "founder", "co-founder", "succession",
+        "interim ceo", "interim cfo",
+        "management shakeup", "leadership change",
+        # expanded: talent moves
+        "poach", "poaches", "poached",
+        "recruit", "recruiting blitz",
+        "leaves for", "departs for",
     ],
 }
 
 _NOISE_TITLE_PATTERNS = [
+    # market roundups & generic lists
     "stock market today:",
     "these stocks moved the most",
     "stocks moving the most today",
     "most active stocks",
     "dow jones futures:",
+    "top 10 trending stocks on wallstreetbets",
+    "trending stocks:",
+    "stocks to watch this week",
+    "stocks to watch today",
+    "morning squawk",
+    "market wrap",
+    "market minute",
+    "stocks making the biggest moves",
+    # generic personal finance / non-actionable
+    "retirement account",
+    "my mom wants to spend",
+    "my dad wants to spend",
+    "interview preparation guide",
+    "interview kickstart",
+    "young banker holding",
+    "portfolio sees red",
+    # clickbait stock predictions with no substance
+    "stock could be the perfect pick",
+    "the best stocks to buy with",
+    "2 stocks to buy and hold",
+    "3 stocks to buy and hold",
+    # other company focus (no ticker relevance)
+    "why alibaba stock",
+    "why nvidia stock",
+    "amd: a tale of",
 ]
 
 
@@ -396,3 +602,525 @@ class FinnhubNewsFetcher(NewsFetcher):
 
         logger.info("Fetched %d unique news events for %s", len(events), ticker)
         return events
+
+
+# ── Real: Alpha Vantage NEWS_SENTIMENT fetcher ───────────────────────────────
+
+class AlphaVantageNewsFetcher(NewsFetcher):
+    """
+    Fetches news with built-in sentiment & relevance scores from Alpha Vantage.
+
+    Advantages over Finnhub:
+      - Returns article URLs
+      - Built-in per-ticker sentiment scores (-1.0 to 1.0)
+      - Built-in per-ticker relevance scores (0.0 to 1.0)
+      - Covers longer historical range
+
+    Free tier limits: 25 requests/day, 5 requests/minute.
+    Each request returns up to 200 articles (with limit=200).
+    Uses monthly windowing to paginate over long date ranges.
+    """
+
+    API_URL       = "https://www.alphavantage.co/query"
+    MAX_PER_REQ   = 200       # max articles per request
+    API_SLEEP_SEC = 12.5      # 5 req/min → 12s between calls
+    WINDOW_DAYS   = 30        # monthly windows for pagination
+
+    def __init__(self, api_key: str | None = None):
+        self.api_key = api_key or os.environ.get("ALPHA_VANTAGE_API_KEY", "")
+        if not self.api_key:
+            raise ValueError(
+                "Alpha Vantage API key required. "
+                "Set ALPHA_VANTAGE_API_KEY in your .env file. "
+                "Get a free key at https://www.alphavantage.co/support/#api-key"
+            )
+        self._cache = DataCache()
+
+    def _fetch_window(self, ticker: str, w_start: date, w_end: date) -> list[dict]:
+        """Fetch one time window from the API."""
+        import requests as _requests
+
+        params = {
+            "function":  "NEWS_SENTIMENT",
+            "tickers":   ticker,
+            "time_from": w_start.strftime("%Y%m%dT0000"),
+            "time_to":   w_end.strftime("%Y%m%dT2359"),
+            "limit":     str(self.MAX_PER_REQ),
+            "sort":      "EARLIEST",
+            "apikey":    self.api_key,
+        }
+
+        time.sleep(self.API_SLEEP_SEC)
+        try:
+            resp = _requests.get(self.API_URL, params=params, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            logger.error("Alpha Vantage fetch error %s (%s~%s): %s",
+                         ticker, w_start, w_end, e)
+            return []
+
+        # Check for API error messages
+        if "Information" in data or "Error Message" in data:
+            msg = data.get("Information") or data.get("Error Message")
+            logger.warning("Alpha Vantage API message: %s", msg)
+            return []
+
+        return data.get("feed", [])
+
+    def _parse_article(self, article: dict, ticker: str) -> MarketEvent | None:
+        """Parse one Alpha Vantage feed item into a MarketEvent."""
+        title       = (article.get("title") or "").strip()
+        summary     = (article.get("summary") or "").strip()
+        source      = (article.get("source") or "").strip()
+        url         = (article.get("url") or "").strip()
+        time_pub    = article.get("time_published", "")
+
+        if not title or not source:
+            return None
+        if any(p in title.lower() for p in _NOISE_TITLE_PATTERNS):
+            return None
+
+        # Parse date from "YYYYMMDDTHHMMSS" format
+        try:
+            article_date = date(int(time_pub[:4]), int(time_pub[4:6]), int(time_pub[6:8]))
+        except (ValueError, IndexError):
+            return None
+
+        # Extract per-ticker sentiment and relevance scores
+        sentiment = None
+        relevance = None
+        for ts in article.get("ticker_sentiment", []):
+            if ts.get("ticker", "").upper() == ticker.upper():
+                try:
+                    sentiment = float(ts.get("ticker_sentiment_score", 0))
+                except (ValueError, TypeError):
+                    pass
+                try:
+                    relevance = float(ts.get("relevance_score", 0))
+                except (ValueError, TypeError):
+                    pass
+                break
+
+        # Fall back to overall sentiment if no per-ticker score
+        if sentiment is None:
+            try:
+                sentiment = float(article.get("overall_sentiment_score", 0))
+            except (ValueError, TypeError):
+                pass
+
+        event_type = _classify_event(title, "")
+
+        ev = MarketEvent(
+            date        = article_date,
+            title       = title,
+            description = summary[:500],
+            source      = source,
+            event_type  = event_type,
+            url         = url or None,
+            sentiment_score = sentiment,
+            relevance_score = relevance,
+        )
+        return ev
+
+    def fetch_news(self, ticker: str, start: date, end: date) -> list[MarketEvent]:
+        """
+        Fetch news across the full date range using monthly windows.
+        Deduplicates by (date, title) and auto-caches to CSV.
+        """
+        windows: list[tuple[date, date]] = []
+        w_start = start
+        while w_start <= end:
+            w_end = min(w_start + timedelta(days=self.WINDOW_DAYS - 1), end)
+            windows.append((w_start, w_end))
+            w_start = w_end + timedelta(days=1)
+
+        logger.info("Alpha Vantage: fetching %s (%s~%s) in %d windows",
+                     ticker, start, end, len(windows))
+
+        seen: set[tuple[date, str]] = set()
+        events: list[MarketEvent] = []
+
+        for i, (ws, we) in enumerate(windows):
+            raw = self._fetch_window(ticker, ws, we)
+            batch_count = 0
+            for article in raw:
+                ev = self._parse_article(article, ticker)
+                if ev is None:
+                    continue
+                key = (ev.date, ev.title)
+                if key in seen:
+                    continue
+                seen.add(key)
+                events.append(ev)
+                batch_count += 1
+            logger.info("  Window %d/%d (%s~%s): %d articles, %d new events",
+                         i + 1, len(windows), ws, we, len(raw), batch_count)
+
+            # Check if we hit rate limit (API returns empty or error)
+            if not raw and i < len(windows) - 1:
+                logger.warning("Alpha Vantage: empty response, possible rate limit. "
+                               "Stopping at window %d/%d. Resume later.",
+                               i + 1, len(windows))
+                break
+
+        events.sort(key=lambda e: e.date)
+        if events:
+            self._cache.save_news(ticker, events)
+
+        logger.info("Alpha Vantage: %d unique events for %s", len(events), ticker)
+        return events
+
+
+# ── Historical data: yfinance earnings/splits/dividends ─────────────────────
+
+class YFinanceEventsFetcher(NewsFetcher):
+    """
+    Extracts historical events from yfinance: earnings dates, stock splits,
+    and significant dividends. Covers the full history of a ticker — fills
+    the gap left by Finnhub's ~1-year news limit.
+    """
+
+    def fetch_news(self, ticker: str, start: date, end: date) -> list[MarketEvent]:
+        import yfinance as yf
+
+        stock = yf.Ticker(ticker)
+        events: list[MarketEvent] = []
+
+        # 1. Earnings dates (most important for anomaly matching)
+        try:
+            earnings = stock.earnings_dates
+            if earnings is not None and not earnings.empty:
+                for ts, row in earnings.iterrows():
+                    try:
+                        d = ts.date() if hasattr(ts, 'date') else ts
+                        if not (start <= d <= end):
+                            continue
+                        eps_est = row.get("EPS Estimate", None)
+                        eps_act = row.get("Reported EPS", None)
+                        surprise = row.get("Surprise(%)", None)
+
+                        # Build descriptive title
+                        parts = [f"{ticker} earnings report"]
+                        if eps_act is not None and not _is_nan(eps_act):
+                            parts.append(f"EPS: ${eps_act:.2f}")
+                        if eps_est is not None and not _is_nan(eps_est):
+                            parts.append(f"(est: ${eps_est:.2f})")
+                        if surprise is not None and not _is_nan(surprise):
+                            beat = "beat" if surprise > 0 else "missed"
+                            parts.append(f"— {beat} by {abs(surprise):.1f}%")
+
+                        title = " ".join(parts)
+
+                        desc = f"Quarterly earnings report for {ticker}."
+                        if eps_act is not None and eps_est is not None:
+                            if not _is_nan(eps_act) and not _is_nan(eps_est):
+                                desc += f" Reported EPS ${eps_act:.2f} vs estimate ${eps_est:.2f}."
+
+                        if eps_act is not None and not _is_nan(eps_act):
+                            beat_exp = (surprise is not None and not _is_nan(surprise)
+                                        and surprise > 0)
+                            events.append(EarningsEvent(
+                                date=d, title=title, description=desc,
+                                source="yfinance",
+                                reported_eps=float(eps_act),
+                                beat_expectations=beat_exp,
+                            ))
+                        else:
+                            events.append(MarketEvent(
+                                date=d, title=title, description=desc,
+                                source="yfinance",
+                                event_type=EventType.EARNINGS,
+                            ))
+                    except Exception as e:
+                        logger.debug("Skipping earnings row: %s", e)
+        except Exception as e:
+            logger.warning("Could not fetch earnings dates for %s: %s", ticker, e)
+
+        # 2. Stock splits
+        try:
+            splits = stock.splits
+            if splits is not None and not splits.empty:
+                for ts, ratio in splits.items():
+                    try:
+                        d = ts.date() if hasattr(ts, 'date') else ts
+                        if not (start <= d <= end) or ratio == 0:
+                            continue
+                        title = f"{ticker} stock split {ratio:.0f}:1"
+                        desc = f"{ticker} executed a {ratio:.0f}-for-1 stock split."
+                        events.append(MarketEvent(
+                            date=d, title=title, description=desc,
+                            source="yfinance", event_type=EventType.PRODUCT,
+                        ))
+                    except Exception as e:
+                        logger.debug("Skipping split row: %s", e)
+        except Exception as e:
+            logger.warning("Could not fetch splits for %s: %s", ticker, e)
+
+        # 3. Significant dividends (only include if amount is notable)
+        try:
+            dividends = stock.dividends
+            if dividends is not None and not dividends.empty:
+                for ts, amount in dividends.items():
+                    try:
+                        d = ts.date() if hasattr(ts, 'date') else ts
+                        if not (start <= d <= end) or amount <= 0:
+                            continue
+                        title = f"{ticker} dividend payment ${amount:.2f}/share"
+                        desc = f"{ticker} paid a dividend of ${amount:.2f} per share."
+                        events.append(MarketEvent(
+                            date=d, title=title, description=desc,
+                            source="yfinance", event_type=EventType.EARNINGS,
+                        ))
+                    except Exception as e:
+                        logger.debug("Skipping dividend row: %s", e)
+        except Exception as e:
+            logger.warning("Could not fetch dividends for %s: %s", ticker, e)
+
+        events.sort(key=lambda e: e.date)
+        logger.info("YFinanceEvents: %d events for %s (%s~%s)",
+                     len(events), ticker, start, end)
+        return events
+
+
+def _is_nan(v) -> bool:
+    """Check if a value is NaN (works for float and numpy)."""
+    try:
+        return v != v  # NaN != NaN is True
+    except (TypeError, ValueError):
+        return False
+
+
+# ── Known historical events for popular tickers ─────────────────────────────
+
+# Manually curated major events that Finnhub misses due to its 1-year limit.
+# These are high-impact events known to drive large price moves.
+_KNOWN_EVENTS: dict[str, list[tuple[date, str, str, EventType]]] = {
+    "META": [
+        # 2021
+        (date(2021, 1, 6), "Facebook bans Trump following Capitol riot",
+         "Facebook indefinitely suspends Donald Trump's account after the Jan 6 Capitol breach.",
+         EventType.REGULATORY),
+        (date(2021, 1, 27), "Facebook Q4 2020 earnings beat, warns of iOS headwinds",
+         "Q4 revenue $28.1B beat estimates. Company warned Apple's iOS 14 privacy changes would hurt ad targeting.",
+         EventType.EARNINGS),
+        (date(2021, 4, 28), "Facebook Q1 2021 earnings crush estimates, revenue up 48%",
+         "Q1 revenue $26.2B vs $23.7B expected. DAU 1.88B. Strong digital ad market recovery.",
+         EventType.EARNINGS),
+        (date(2021, 6, 28), "FTC files antitrust complaint against Facebook",
+         "The FTC refiled its antitrust lawsuit alleging Facebook maintains an illegal monopoly in social networking.",
+         EventType.LEGAL),
+        (date(2021, 7, 28), "Facebook Q2 2021 earnings beat but warns of growth slowdown",
+         "Q2 revenue $29.1B beat estimates. Warned of slower growth as pandemic digital surge normalizes.",
+         EventType.EARNINGS),
+        (date(2021, 10, 4), "Facebook, Instagram, WhatsApp suffer massive global outage",
+         "All Facebook services went down for ~6 hours due to a BGP routing configuration error. Stock dropped 4.9%.",
+         EventType.PRODUCT),
+        (date(2021, 10, 5), "Facebook whistleblower Frances Haugen testifies before Senate",
+         "Former employee testified that Facebook prioritized profits over user safety, especially for teens.",
+         EventType.REGULATORY),
+        (date(2021, 10, 25), "Facebook Q3 2021 earnings beat, revenue $29B",
+         "Beat estimates but warned of Apple ATT impact. Reality Labs lost $2.6B.",
+         EventType.EARNINGS),
+        (date(2021, 10, 28), "Facebook rebrands to Meta Platforms",
+         "CEO Zuckerberg announced the company rebrand to Meta, pivoting focus to the metaverse.",
+         EventType.PRODUCT),
+        # 2022
+        (date(2022, 2, 2), "Meta Q4 2021 earnings miss, first daily user decline",
+         "Facebook reported first-ever decline in daily active users. Stock plunged 26% after hours.",
+         EventType.EARNINGS),
+        (date(2022, 4, 27), "Meta Q1 2022 earnings beat lowered expectations",
+         "Revenue $27.9B slightly beat. User growth returned. Stock surged 18% after hours.",
+         EventType.EARNINGS),
+        (date(2022, 7, 27), "Meta Q2 2022: first ever revenue decline",
+         "Revenue fell 1% to $28.8B, first-ever year-over-year decline. Digital ad market weakened.",
+         EventType.EARNINGS),
+        (date(2022, 10, 26), "Meta Q3 2022 earnings disappoint, Reality Labs burns $3.7B",
+         "Revenue down 4% to $27.7B. Reality Labs lost $3.7B. Guided higher capex for AI/metaverse.",
+         EventType.EARNINGS),
+        (date(2022, 11, 9), "Meta announces massive layoffs — 11,000 employees cut",
+         "Zuckerberg announced cutting 13% of workforce, the company's first mass layoff.",
+         EventType.PERSONNEL),
+        # 2023
+        (date(2023, 2, 1), "Meta Q4 2022 earnings: 'Year of Efficiency' announced",
+         "Revenue $32.2B beat estimates. Zuckerberg declared 2023 the 'Year of Efficiency'. Stock surged 23%.",
+         EventType.EARNINGS),
+        (date(2023, 3, 14), "Meta announces second round of layoffs — 10,000 jobs cut",
+         "Meta cut another 10,000 roles as part of its efficiency drive. Flattened management layers.",
+         EventType.PERSONNEL),
+        (date(2023, 4, 26), "Meta Q1 2023 earnings blow past estimates",
+         "Revenue $28.6B vs $27.7B expected. User engagement up across all apps. Efficiency gains visible.",
+         EventType.EARNINGS),
+        (date(2023, 7, 5), "Meta launches Threads, gaining 100M users in 5 days",
+         "Threads launched as a Twitter competitor, hitting 100 million sign-ups in under a week.",
+         EventType.PRODUCT),
+        (date(2023, 7, 18), "Meta releases Llama 2 as open-source AI model",
+         "Meta released Llama 2, making a powerful large language model freely available for research and commercial use.",
+         EventType.AI_TECH),
+        (date(2023, 7, 26), "Meta Q2 2023 earnings blow past estimates, stock surges",
+         "Revenue $32.0B vs $31.1B expected. Net income more than doubled YoY. Stock up 10% after hours.",
+         EventType.EARNINGS),
+        (date(2023, 9, 27), "Meta unveils Quest 3 VR headset and AI-powered smart glasses",
+         "Meta launched Quest 3 ($499) and AI-powered Ray-Ban smart glasses with Meta AI assistant.",
+         EventType.PRODUCT),
+        (date(2023, 10, 25), "Meta Q3 2023 earnings crush estimates, AI drives ad growth",
+         "Revenue $34.1B vs $33.6B expected. AI-powered ad targeting significantly improved ROAS.",
+         EventType.EARNINGS),
+        # 2024
+        (date(2024, 2, 1), "Meta Q4 2023 earnings blowout, announces first-ever dividend",
+         "Revenue $40.1B vs $39.2B expected. Announced $0.50/share quarterly dividend and $50B buyback. Stock surged 20%.",
+         EventType.EARNINGS),
+        (date(2024, 4, 18), "Meta releases Llama 3, most capable open-source LLM",
+         "Meta released Llama 3 in 8B and 70B parameter versions, claiming state-of-the-art open-source performance.",
+         EventType.AI_TECH),
+        (date(2024, 4, 24), "Meta Q1 2024 earnings beat but capex guidance spooks investors",
+         "Revenue $36.5B beat estimates. But raised 2024 capex guidance to $35-40B for AI infrastructure. Stock fell 15%.",
+         EventType.EARNINGS),
+        (date(2024, 7, 31), "Meta Q2 2024 earnings strong, $37-40.5B Q3 revenue guide",
+         "Revenue $39.1B vs $38.3B expected. Strong Reels monetization. Guided Q3 revenue $38.5-41B.",
+         EventType.EARNINGS),
+        (date(2024, 9, 25), "Meta unveils Orion AR glasses prototype and Quest 3S",
+         "Meta showed off Orion, the most advanced AR glasses prototype, and launched the $299 Quest 3S.",
+         EventType.PRODUCT),
+        (date(2024, 10, 30), "Meta Q3 2024 earnings beat, AI capex continues to surge",
+         "Revenue $40.6B vs $40.3B expected. Raised 2024 capex to $38-40B. Reality Labs lost $4.4B.",
+         EventType.EARNINGS),
+    ],
+    "NVDA": [
+        (date(2021, 4, 12), "NVIDIA announces Grace CPU for data centers",
+         "NVIDIA unveiled Grace, its first data center CPU, designed for AI and HPC workloads.",
+         EventType.PRODUCT),
+        (date(2022, 9, 1), "US orders NVIDIA to halt A100/H100 chip sales to China",
+         "US government restricted export of NVIDIA's top AI chips to China, citing national security.",
+         EventType.REGULATORY),
+        (date(2023, 5, 24), "NVIDIA Q1 FY2024 earnings: data center revenue explodes",
+         "Revenue guided $11B for Q2, 50% above consensus. Data center demand for H100 chips surging.",
+         EventType.EARNINGS),
+        (date(2023, 5, 30), "NVIDIA briefly hits $1 trillion market cap",
+         "NVIDIA became the first chipmaker to reach a $1 trillion valuation, driven by AI demand.",
+         EventType.PRODUCT),
+        (date(2024, 3, 18), "NVIDIA unveils Blackwell B200 GPU at GTC 2024",
+         "Jensen Huang presented the B200 GPU with 20 petaflops of FP4 AI performance at GTC.",
+         EventType.AI_TECH),
+        (date(2024, 6, 10), "NVIDIA announces 10-for-1 stock split",
+         "NVIDIA executed a 10:1 stock split, making shares more accessible to retail investors.",
+         EventType.PRODUCT),
+    ],
+    "AAPL": [
+        (date(2021, 4, 20), "Apple unveils AirTag, M1 iMac, and new iPad Pro",
+         "Apple announced AirTag tracker, redesigned M1 iMac, and M1-powered iPad Pro at spring event.",
+         EventType.PRODUCT),
+        (date(2021, 9, 10), "Epic Games vs Apple: judge rules Apple not a monopoly",
+         "Federal judge ruled Apple is not a monopoly but ordered changes to App Store anti-steering rules.",
+         EventType.LEGAL),
+        (date(2023, 6, 5), "Apple unveils Vision Pro mixed reality headset at WWDC",
+         "Apple announced the $3,499 Vision Pro, its first major new product category since Apple Watch.",
+         EventType.PRODUCT),
+        (date(2024, 6, 10), "Apple announces Apple Intelligence AI features at WWDC 2024",
+         "Apple revealed Apple Intelligence, a suite of on-device and cloud AI features powered by its own models.",
+         EventType.AI_TECH),
+    ],
+    "GOOGL": [
+        (date(2021, 10, 20), "DOJ antitrust suit against Google moves forward",
+         "Federal judge allowed the DOJ's antitrust case against Google's search monopoly to proceed to trial.",
+         EventType.LEGAL),
+        (date(2023, 2, 6), "Google announces Bard AI chatbot, stock drops 8%",
+         "Google rushed to announce Bard in response to ChatGPT. A demo error caused stock to drop 8%.",
+         EventType.AI_TECH),
+        (date(2023, 12, 6), "Google unveils Gemini, its most capable AI model",
+         "Google launched Gemini AI model family, claiming superiority over GPT-4 in several benchmarks.",
+         EventType.AI_TECH),
+        (date(2024, 8, 5), "Federal judge rules Google is a monopolist in search",
+         "Judge ruled Google illegally maintained its search monopoly through exclusive default deals worth $26B/year.",
+         EventType.LEGAL),
+    ],
+    "TSLA": [
+        (date(2021, 10, 25), "Hertz orders 100,000 Teslas, TSLA hits $1T market cap",
+         "Hertz announced a massive 100,000 Tesla order. Tesla briefly crossed $1 trillion market cap.",
+         EventType.PRODUCT),
+        (date(2022, 4, 14), "Elon Musk launches $44B hostile bid for Twitter",
+         "Musk offered to buy Twitter for $54.20/share, raising concerns about Tesla CEO distraction.",
+         EventType.PERSONNEL),
+        (date(2022, 10, 27), "Musk completes Twitter acquisition for $44B",
+         "Musk closed the Twitter deal, becoming CEO. Tesla investors worried about leadership distraction.",
+         EventType.PERSONNEL),
+        (date(2024, 10, 10), "Tesla unveils Cybercab robotaxi and Robovan at We, Robot event",
+         "Tesla showed off the Cybercab ($30K, no steering wheel) and a 20-seat Robovan concept.",
+         EventType.PRODUCT),
+    ],
+    "AMZN": [
+        (date(2022, 3, 9), "Amazon announces 20-for-1 stock split",
+         "Amazon approved a 20:1 stock split and $10B buyback program.",
+         EventType.PRODUCT),
+        (date(2023, 1, 4), "Amazon announces 18,000 layoffs, largest in company history",
+         "Andy Jassy announced the largest layoff in Amazon's history, primarily in corporate and tech roles.",
+         EventType.PERSONNEL),
+        (date(2023, 9, 25), "Amazon invests up to $4B in Anthropic",
+         "Amazon announced a major investment in AI startup Anthropic, maker of Claude chatbot.",
+         EventType.AI_TECH),
+    ],
+}
+
+
+class KnownEventsFetcher(NewsFetcher):
+    """
+    Returns manually curated major historical events for popular tickers.
+    These cover the pre-Finnhub period where API data is unavailable.
+    """
+
+    def fetch_news(self, ticker: str, start: date, end: date) -> list[MarketEvent]:
+        known = _KNOWN_EVENTS.get(ticker.upper(), [])
+        events = []
+        for d, title, desc, etype in known:
+            if start <= d <= end:
+                if etype == EventType.EARNINGS:
+                    events.append(EarningsEvent(
+                        date=d, title=title, description=desc,
+                        source="curated",
+                    ))
+                else:
+                    events.append(MarketEvent(
+                        date=d, title=title, description=desc,
+                        source="curated", event_type=etype,
+                    ))
+        logger.info("KnownEvents: %d events for %s (%s~%s)",
+                     len(events), ticker, start, end)
+        return events
+
+
+# ── Composite fetcher: merge multiple sources ────────────────────────────────
+
+class CompositeNewsFetcher(NewsFetcher):
+    """
+    Combines multiple NewsFetcher sources into one deduplicated stream.
+    Events are deduplicated by (date, title) and sorted chronologically.
+    Automatically saves merged results to cache.
+    """
+
+    def __init__(self, fetchers: list[NewsFetcher]):
+        self._fetchers = fetchers
+        self._cache = DataCache()
+
+    def fetch_news(self, ticker: str, start: date, end: date) -> list[MarketEvent]:
+        seen: set[tuple[date, str]] = set()
+        merged: list[MarketEvent] = []
+
+        for fetcher in self._fetchers:
+            try:
+                events = fetcher.fetch_news(ticker, start, end)
+                for ev in events:
+                    key = (ev.date, ev.title)
+                    if key not in seen:
+                        seen.add(key)
+                        merged.append(ev)
+            except Exception as e:
+                logger.warning("Fetcher %s failed for %s: %s",
+                               type(fetcher).__name__, ticker, e)
+
+        merged.sort(key=lambda e: e.date)
+        if merged:
+            self._cache.save_news(ticker, merged)
+
+        logger.info("CompositeNews: %d total events for %s (%s~%s) from %d sources",
+                     len(merged), ticker, start, end, len(self._fetchers))
+        return merged
