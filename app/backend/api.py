@@ -37,6 +37,7 @@ from module3_sentiment_lstm import (
     MockSentimentAnalyzer as SentimentAnalyzer,
     MockForecaster,
     TransformerForecaster,
+    TFTForecaster,
 )
 from module4_claude_report import StandardReportBuilder, ReportGenerator
 
@@ -241,7 +242,7 @@ def _fetch_prices_and_news(ticker: str, start: date, end: date):
 async def analyze(
     ticker: str,
     start: str = Query(default="2021-01-01", description="Start date YYYY-MM-DD"),
-    end:   str = Query(default="2026-04-05", description="End date YYYY-MM-DD"),
+    end:   str = Query(default="2026-04-15", description="End date YYYY-MM-DD"),
 ):
     """
     Stage 1 — fast path.
@@ -294,7 +295,7 @@ async def analyze(
 async def forecast(
     ticker: str,
     start: str = Query(default="2021-01-01"),
-    end:   str = Query(default="2026-04-05"),
+    end:   str = Query(default="2026-04-15"),
 ):
     """
     Stage 2 — slow path (30–60 s for multi-year range).
@@ -314,24 +315,41 @@ async def forecast(
         detector  = _make_detector()
         anomalies = detector.detect(prices, events, ticker=t)
 
-        # Run blocking torch training in a thread so the event loop stays free
-        tf = TransformerForecaster()
+        # Run blocking torch training in threads so the event loop stays free
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None, lambda: tf.predict(prices, anomalies, ticker=t)
+        tf_model  = TransformerForecaster()
+        tft_model = TFTForecaster()
+        tf_result  = await loop.run_in_executor(
+            None, lambda: tf_model.predict(prices, anomalies, ticker=t)
         )
+        tft_result = await loop.run_in_executor(
+            None, lambda: tft_model.predict(prices, anomalies, ticker=t)
+        )
+
+        def _to_list(arr):
+            return arr.tolist() if hasattr(arr, "tolist") else list(arr)
 
         data = {
             "ticker":       t,
-            "model_name":   result.model_name,
-            "day5_price":   result.day5_price,
-            "forecast_5d":  result.forecast_5d,
-            "actual":       result.actual.tolist() if hasattr(result.actual, "tolist") else list(result.actual),
-            "predicted":    result.predicted.tolist() if hasattr(result.predicted, "tolist") else list(result.predicted),
-            "test_dates":   [str(d) for d in result.test_dates],
-            "dir_accuracy": round(result.dir_accuracy, 4),
-            "mae":          round(result.mae, 2),
-            "sector_name":  result.sector_name,
+            # Transformer
+            "model_name":   tf_result.model_name,
+            "day5_price":   tf_result.day5_price,
+            "forecast_5d":  tf_result.forecast_5d,
+            "actual":       _to_list(tf_result.actual),
+            "predicted":    _to_list(tf_result.predicted),
+            "test_dates":   [str(d) for d in tf_result.test_dates],
+            "dir_accuracy": round(tf_result.dir_accuracy, 4),
+            "mae":          round(tf_result.mae, 2),
+            "sector_name":  tf_result.sector_name,
+            # TFT
+            "tft_model_name":   tft_result.model_name,
+            "tft_day5_price":   tft_result.day5_price,
+            "tft_forecast_5d":  tft_result.forecast_5d,
+            "tft_actual":       _to_list(tft_result.actual),
+            "tft_predicted":    _to_list(tft_result.predicted),
+            "tft_test_dates":   [str(d) for d in tft_result.test_dates],
+            "tft_dir_accuracy": round(tft_result.dir_accuracy, 4),
+            "tft_mae":          round(tft_result.mae, 2),
         }
         _save_forecast_cache(t, start_d, end_d, data)
         return data
@@ -345,10 +363,10 @@ async def forecast(
 async def generate_report(
     ticker: str,
     start: str = Query(default="2021-01-01"),
-    end:   str = Query(default="2026-04-05"),
+    end:   str = Query(default="2026-04-15"),
 ):
     """
-    Stage 3 — Claude AI report (on-demand, requires ANTHROPIC_API_KEY).
+    Stage 3 — GPT-4o report (on-demand, requires OPENAI_API_KEY).
     Uses cached Transformer day5 price if available, otherwise mock.
     """
     try:
