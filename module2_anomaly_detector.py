@@ -353,7 +353,8 @@ class FunnelDetector:
 
             # ── Tier 1: direct price-level anomaly ────────────────────────────
             if abs(pct_change) >= price_threshold:
-                nearby  = _find_nearby_events(price.date, events, pre_days, post_days, ticker)
+                nearby  = _find_nearby_events(price.date, events, pre_days, post_days,
+                                              ticker, pct_change=pct_change)
                 comment = _build_comment(price, pct_change, [], nearby)
                 anomalies.append(AnomalyPoint(
                     price_point=price,
@@ -366,7 +367,8 @@ class FunnelDetector:
             # ── Tier 2: funnel fallback (min_triggers detectors must agree) ───
             triggered = [d for d in self.detectors if d.is_anomaly(price, prices)]
             if len(triggered) >= self.min_triggers:
-                nearby  = _find_nearby_events(price.date, events, pre_days, post_days, ticker)
+                nearby  = _find_nearby_events(price.date, events, pre_days, post_days,
+                                              ticker, pct_change=pct_change)
                 comment = _build_comment(price, pct_change, triggered, nearby)
                 anomalies.append(AnomalyPoint(
                     price_point=price,
@@ -377,54 +379,273 @@ class FunnelDetector:
         return anomalies
 
 
-# ── helpers ───────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# News–Anomaly Matching Pipeline
+#
+# Step 0 — Time window: keep events within [anomaly - pre_days, anomaly + post_days]
+# Stage 1 — Market Layer: classify each candidate as Firm / Sector / Market / Noise
+# Stage 2 — (reserved) Embedding similarity for events without relevance scores
+# Stage 3 — Composite score: weighted sum of relevance, importance, direction, recency
+#           Apply minimum score threshold, return top_n sorted by score descending
+# ══════════════════════════════════════════════════════════════════════════════
 
-# Lower number = shown first in related_events list passed to module4.
-_EVENT_PRIORITY: dict[EventType, int] = {
-    EventType.EARNINGS:   1,
-    EventType.REGULATORY: 2,
-    EventType.PRODUCT:    3,
-    EventType.ANALYST:    4,
-    EventType.PERSONNEL:  5,
-    EventType.MACRO:      6,
-    EventType.OTHER:      7,
-}
 
-# Ticker → keywords that must appear in title/description to count as related.
+# ── Lookup tables ─────────────────────────────────────────────────────────────
+
+# Ticker → keywords. If ANY keyword appears in title+description → firm layer.
 _TICKER_KEYWORDS: dict[str, list[str]] = {
-    "NVDA":  ["nvidia", "nvda", "jensen huang", "h100", "h20", "blackwell"],
-    "AAPL":  ["apple", "aapl", "tim cook", "iphone", "ipad", "ios", "mac"],
-    "AMZN":  ["amazon", "amzn", "aws", "andy jassy"],
-    "GOOGL": ["google", "googl", "alphabet", "sundar pichai", "gemini", "youtube"],
-    "META":  ["meta", "facebook", "instagram", "whatsapp", "zuckerberg", "llama"],
-    "TSLA":  ["tesla", "tsla", "elon musk", "cybertruck", "optimus"],
+    "NVDA":  ["nvidia", "nvda", "jensen huang", "h100", "h20", "blackwell",
+              "geforce", "cuda", "tensorrt"],
+    "AAPL":  ["apple", "aapl", "tim cook", "iphone", "ipad", "ios", "mac",
+              "app store", "apple intelligence", "vision pro", "airpods"],
+    "AMZN":  ["amazon", "amzn", "aws", "andy jassy",
+              "prime video", "alexa", "kindle"],
+    "GOOGL": ["google", "googl", "alphabet", "sundar pichai", "gemini", "youtube",
+              "waymo", "deepmind", "android", "chrome", "pixel"],
+    "META":  ["meta", "facebook", "instagram", "whatsapp", "zuckerberg", "llama",
+              "threads", "ray-ban", "reels", "oculus", "quest 3", "quest 2",
+              "reality labs", "meta ai", "meta platforms", "messenger",
+              "horizon worlds"],
+    "TSLA":  ["tesla", "tsla", "elon musk", "cybertruck", "optimus",
+              "supercharger", "autopilot", "full self-driving", "fsd"],
 }
 
+# Sector-level keywords: tech industry terms that are not about a specific firm.
+_SECTOR_KEYWORDS: list[str] = [
+    # tech industry grouping
+    "big tech", "magnificent seven", "magnificent 7", "mag 7", "faang",
+    "mega cap", "mega-cap",
+    "tech stocks", "tech sector", "tech giant", "tech earnings",
+    "tech rally", "tech rout", "tech selloff", "tech layoffs",
+    "silicon valley",
+    # social media / advertising
+    "social media", "social network",
+    "digital advertising", "online advertising", "ad market",
+    "ad spend", "ad spending", "digital ad", "ad tech",
+    "content moderation",
+    # AI / compute / hardware
+    "ai stocks", "ai trade", "ai boom", "ai bubble",
+    "semiconductor", "chip ", "gpu ",
+    "data center", "cloud computing",
+    "open source", "open-source",
+    "vr headset", "mixed reality", "ar glasses",
+    # regulation
+    "big tech regulation", "privacy",
+]
 
-def _relevance_score(event: MarketEvent, anomaly_date: date) -> float:
+# Market-level keywords: broad macro/index events that affect ALL stocks.
+_MARKET_KEYWORDS: list[str] = [
+    "nasdaq", "s&p 500", "s&p500", "dow jones",
+    "wall street", "stock market",
+    "bull market", "bear market",
+    "market rally", "market selloff", "market crash",
+    "risk-on", "risk-off", "risk on", "risk off",
+]
+
+# EventTypes that imply sector-level relevance even without keyword matches.
+# If Module 1 already classified an event as one of these types, we don't need
+# to re-check sector keywords — the EventType itself is the signal.
+_SECTOR_EVENTTYPES: set[EventType] = {
+    EventType.EARNINGS, EventType.LEGAL, EventType.REGULATORY,
+    EventType.PRODUCT, EventType.AI_TECH, EventType.ANALYST,
+    EventType.PERSONNEL,
+}
+
+# EventType → importance weight (0.0 – 1.0).
+# Reflects how strongly this type of event typically drives price anomalies.
+_EVENT_IMPORTANCE: dict[EventType, float] = {
+    EventType.EARNINGS:   1.00,
+    EventType.LEGAL:      0.85,
+    EventType.REGULATORY: 0.80,
+    EventType.PERSONNEL:  0.75,
+    EventType.PRODUCT:    0.70,
+    EventType.AI_TECH:    0.65,
+    EventType.ANALYST:    0.60,
+    EventType.MACRO:      0.50,
+    EventType.OTHER:      0.15,
+}
+
+# Alpha Vantage sentiment scores range ≈ -0.35 to +0.35.
+# Divide by this to normalize to [-1, +1] before computing direction match.
+_AV_SENTIMENT_SCALE = 0.35
+
+# Minimum composite score to keep an event. Calibrated via forensic analysis:
+# true mismatches scored 0.39–0.52, correct matches scored 0.55+.
+MIN_SCORE_THRESHOLD = 0.45
+
+
+# ── Stage 1: Market Layer ─────────────────────────────────────────────────────
+
+def _has_sector_mention(text: str) -> bool:
+    """Check if text matches any sector keyword."""
+    return any(k in text for k in _SECTOR_KEYWORDS)
+
+
+def _classify_market_layer(
+    event: MarketEvent,
+    ticker: str | None,
+) -> tuple[str, float]:
     """
-    Lower score = more relevant = shown first.
+    Classify an event into one of four market layers.
 
-    Score = type_base + distance_penalty
-      type_base      : EventType priority (EARNINGS=1 … OTHER=7)
-      distance_penalty: pre-event  days × 0.5  (causal — news before anomaly)
-                        post-event days × 0.8  (reaction — news after anomaly)
+    Three keyword lists, each serving a distinct role:
+      _TICKER_KEYWORDS         → firm  (1.0)  "Is this about the company?"
+      _TICKER_SECTOR_KEYWORDS  → sector (0.6)  "Is this about the company's industry?"
+      + _COMMON_SECTOR_KEYWORDS
+      _MARKET_KEYWORDS         → market (0.3)  "Is this about the broad market?"
 
-    Examples (pre_days=3, post_days=1):
-      EARNINGS  day 0  → 1 + 0.0 = 1.0  ← best possible
-      EARNINGS  day -1 → 1 + 0.5 = 1.5
-      REGULATORY day 0 → 2 + 0.0 = 2.0
-      EARNINGS  day -3 → 1 + 1.5 = 2.5
-      OTHER     day +1 → 7 + 0.8 = 7.8  ← least relevant
+    Plus: EventType from Module 1 is reused as a signal (no duplicate keywords).
+    If Module 1 already classified an event as EARNINGS/LEGAL/etc., that implies
+    sector-level relevance — no need to re-match keywords.
+
+    Decision chain (short-circuit, first match wins):
+
+      Priority  Condition                                 → Layer    Weight
+      ────────  ────────────────────────────────────────  ────────  ──────
+      1         source = yfinance                         → firm     1.0
+      2         ticker keyword hit in text                → firm     1.0
+      3         AV rel ≥ 0.7, no ticker kw, +sector kw   → sector   0.6
+      4         AV rel ≥ 0.7, no ticker kw, -sector kw   → sector   0.5
+      5         AV rel 0.3–0.7, +sector keyword          → sector   0.6
+      6         AV rel 0.3–0.7, -sector keyword          → sector   0.4
+      7         AV rel < 0.3                              → noise    0.0
+      8         no AV, +sector keyword                   → sector   0.6
+      9         no AV, +market keyword                   → market   0.3
+      10        no AV, EventType in _SECTOR_EVENTTYPES   → sector   0.6
+      11        no AV, EventType = MACRO                 → market   0.3
+      12        no AV, EventType = OTHER                 → noise    0.0
+
+    Returns: (layer_name, weight)
     """
-    days_before = (anomaly_date - event.date).days   # positive = before anomaly
-    type_base   = _EVENT_PRIORITY.get(event.event_type, 7)
-    if days_before >= 0:                              # pre-event (causal)
-        distance_penalty = days_before * 0.5
-    else:                                             # post-event (reaction)
-        distance_penalty = abs(days_before) * 0.8
-    return type_base + distance_penalty
+    text = (event.title + " " + event.description).lower()
 
+    # ① Ticker keyword match — ground truth, highest priority
+    has_ticker_mention = False
+    if ticker:
+        kws = _TICKER_KEYWORDS.get(ticker.upper(), [])
+        if kws and any(k in text for k in kws):
+            has_ticker_mention = True
+
+    # ② yfinance source → always firm
+    if event.source == "yfinance":
+        return "firm", 1.0
+
+    # ③ Ticker keyword hit → firm
+    if has_ticker_mention:
+        return "firm", 1.0
+
+    # ④ AV relevance cross-check (never blindly trust AV for firm)
+    has_sector = _has_sector_mention(text)
+
+    if event.relevance_score is not None:
+        if event.relevance_score >= 0.7:
+            # AV says high relevance but no ticker keyword.
+            # Downgrade to sector — AV relevance can be wrong.
+            return ("sector", 0.6) if has_sector else ("sector", 0.5)
+        if event.relevance_score >= 0.3:
+            return ("sector", 0.6) if has_sector else ("sector", 0.4)
+        return "noise", 0.0  # AV says low relevance
+
+    # ⑤ No AV data — fall back to keywords + EventType
+    if has_sector:
+        return "sector", 0.6
+    if any(k in text for k in _MARKET_KEYWORDS):
+        return "market", 0.3
+    # Reuse Module 1's EventType: typed events imply sector relevance
+    if event.event_type in _SECTOR_EVENTTYPES:
+        return "sector", 0.6
+    if event.event_type == EventType.MACRO:
+        return "market", 0.3
+    # OTHER with no keyword matches → noise
+    return "noise", 0.0
+
+
+# ── Stage 3: Composite Scoring ────────────────────────────────────────────────
+
+def _recency_score(event_date: date, anomaly_date: date) -> float:
+    """
+    Time decay: same-day = 1.0, decays toward 0 at window edges.
+    Pre-event (causal) decays slower than post-event (reaction).
+
+      delta  direction   score
+      ─────  ─────────   ─────
+        0    same day    1.0
+       +1    1d before   0.8
+       +2    2d before   0.6
+       +3    3d before   0.4
+       -1    1d after    0.5
+    """
+    delta = (anomaly_date - event_date).days  # positive = event is before anomaly
+    if delta == 0:
+        return 1.0
+    if delta > 0:
+        return max(0.0, 1.0 - delta * 0.2)
+    # Post-event: starts lower (0.5) and decays faster
+    return max(0.0, 0.5 - abs(delta) * 0.3)
+
+
+def _direction_match_score(sentiment: float | None, pct_change: float) -> float:
+    """
+    Measures how well the event's sentiment explains the anomaly direction.
+
+      sentiment   anomaly    result
+      ─────────   ───────    ──────
+      bearish     drop       → 1.0  (strong causal agreement)
+      bullish     surge      → 1.0
+      None        any        → 0.5  (neutral, no data)
+      bullish     drop       → 0.0  (contradiction)
+      bearish     surge      → 0.0
+
+    Alpha Vantage sentiment is ≈ -0.35 to +0.35. We normalize to [-1, +1]
+    before computing agreement so the score uses the full 0–1 range.
+    """
+    if sentiment is None:
+        return 0.5
+
+    # Normalize AV scale (-0.35..+0.35) → (-1..+1)
+    normalized = max(-1.0, min(1.0, sentiment / _AV_SENTIMENT_SCALE))
+    anomaly_dir = 1.0 if pct_change > 0 else -1.0
+
+    agreement = normalized * anomaly_dir  # positive when same direction
+    return max(0.0, min(1.0, 0.5 + agreement * 0.5))
+
+
+def _composite_score(
+    event: MarketEvent,
+    anomaly_date: date,
+    pct_change: float,
+    market_weight: float,
+) -> float:
+    """
+    Final relevance score for one (event, anomaly) pair. Higher = more relevant.
+
+    score = 0.40 × relevance        (market_weight from Stage 1)
+          + 0.30 × event_importance  (fixed weight per EventType)
+          + 0.15 × direction_match   (sentiment ↔ anomaly direction agreement)
+          + 0.15 × recency           (time decay from event to anomaly)
+
+    Weight rationale:
+      - relevance (0.40): dominant signal — is this event about the right company?
+      - importance (0.30): EARNINGS > LEGAL > PRODUCT > OTHER, hard prior
+      - direction (0.15): sentiment agreement is a tiebreaker, not a primary signal.
+        Events without sentiment get 0.5 (neutral), so the max swing is ±0.075,
+        which cannot override a full EventType tier difference (0.30 × 0.15 = 0.045).
+      - recency (0.15): same-day events beat 3-day-old events
+
+    All four components are in [0, 1], so score ∈ [0, 1].
+    """
+    relevance  = market_weight
+    importance = _EVENT_IMPORTANCE.get(event.event_type, 0.15)
+    direction  = _direction_match_score(event.sentiment_score, pct_change)
+    recency    = _recency_score(event.date, anomaly_date)
+
+    return (0.40 * relevance
+          + 0.30 * importance
+          + 0.15 * direction
+          + 0.15 * recency)
+
+
+# ── Main matching function ────────────────────────────────────────────────────
 
 def _find_nearby_events(
     anomaly_date: date,
@@ -433,26 +654,38 @@ def _find_nearby_events(
     post_days: int,
     ticker: str | None = None,
     top_n: int = 10,
+    pct_change: float = 0.0,
 ) -> list[MarketEvent]:
-    # Asymmetric window: wider look-back (cause) than look-forward (reaction).
+    """
+    News–anomaly matching pipeline.
+
+    Step 0 — Time window: [anomaly_date - pre_days, anomaly_date + post_days]
+    Stage 1 — Market Layer: Firm / Sector / Market / Noise → drop noise
+    Stage 2 — (reserved for embedding similarity)
+    Stage 3 — Composite score → drop below MIN_SCORE_THRESHOLD → sort desc → top_n
+    """
+    # Step 0: time window
     nearby = [
         e for e in events
         if -pre_days <= (e.date - anomaly_date).days <= post_days
     ]
-    # Ticker keyword filter: keep events that mention the company.
-    if ticker:
-        kws = _TICKER_KEYWORDS.get(ticker.upper(), [])
-        if kws:
-            text_match = [
-                e for e in nearby
-                if any(k in (e.title + " " + e.description).lower() for k in kws)
-            ]
-            # Fall back to unfiltered list if nothing survives (e.g. unknown ticker).
-            if text_match:
-                nearby = text_match
-    # Sort by composite relevance: EventType priority + time-distance penalty.
-    nearby.sort(key=lambda e: _relevance_score(e, anomaly_date))
-    return nearby[:top_n]
+
+    # Stage 1: classify and drop noise
+    candidates: list[tuple[MarketEvent, float]] = []
+    for e in nearby:
+        layer, weight = _classify_market_layer(e, ticker)
+        if layer != "noise":
+            candidates.append((e, weight))
+
+    # Stage 3: score, threshold, sort
+    scored = [
+        (e, _composite_score(e, anomaly_date, pct_change, w))
+        for e, w in candidates
+    ]
+    scored = [(e, s) for e, s in scored if s >= MIN_SCORE_THRESHOLD]
+    scored.sort(key=lambda x: -x[1])
+
+    return [e for e, _ in scored[:top_n]]
 
 
 def _build_comment(
