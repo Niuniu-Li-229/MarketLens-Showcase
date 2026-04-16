@@ -17,8 +17,8 @@ env/
 # Generated chart outputs
 *.png
 
-# Data cache — large, regenerated automatically on first run
-data_cache/
+# Data cache — committed to repo for warm-start
+# data_cache/
 
 # Node / Frontend
 app/frontend/node_modules/
