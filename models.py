@@ -19,8 +19,10 @@ class EventType(Enum):
     EARNINGS   = "EARNINGS"
     ANALYST    = "ANALYST"
     REGULATORY = "REGULATORY"
+    LEGAL      = "LEGAL"       # lawsuits, trials, court rulings, settlements
     MACRO      = "MACRO"
     PRODUCT    = "PRODUCT"
+    AI_TECH    = "AI_TECH"     # AI strategy, model releases, data centers, chips
     PERSONNEL  = "PERSONNEL"   # executive changes: CEO/CFO appointments, resignations
     OTHER      = "OTHER"
 
@@ -64,6 +66,9 @@ class MarketEvent:
     description: str
     source:     str
     event_type: EventType
+    url:              Optional[str]   = None   # article link (Alpha Vantage, Finnhub)
+    sentiment_score:  Optional[float] = None   # per-article sentiment (-1.0 to 1.0)
+    relevance_score:  Optional[float] = None   # ticker relevance (0.0 to 1.0)
 
     def __post_init__(self):
         if not self.title or not self.title.strip():
