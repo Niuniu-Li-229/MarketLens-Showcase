@@ -63,6 +63,7 @@ function MktCell({ label, value, color }) {
 export default function Chart4Report({
   ticker, startDate, endDate,
   totalReturn, anomalyCount, sentimentScore, sentimentLabel,
+  day5Price,
 }) {
   const [mktInfo,  setMktInfo]  = useState(null)
   const [mktError, setMktError] = useState(null)
@@ -95,7 +96,6 @@ export default function Chart4Report({
 
   const sentConf   = SENTIMENT_CFG[sentimentLabel] ?? SENTIMENT_CFG.neutral
   const retColor   = totalReturn >= 0 ? C.green : C.red
-  const predPrice  = mktInfo?.analyst_target
 
   // Market metric colour helpers
   const peColor  = mktInfo?.pe_ratio ? (mktInfo.pe_ratio < 30 ? C.blue : C.orange) : C.gray
@@ -121,7 +121,7 @@ export default function Chart4Report({
       </p>
 
       <p className="text-sm font-medium text-gray-500">
-        {ticker} — AI analysis report
+        {ticker} — AI analysis report (GPT-4o)
       </p>
 
       {/* ── Row 1: Core stats ── */}
@@ -135,8 +135,8 @@ export default function Chart4Report({
           large
         />
         <StatCell
-          label="Analyst target"
-          value={mktInfo?.analyst_target ? `$${mktInfo.analyst_target.toFixed(2)}` : '…'}
+          label="Predicted D5"
+          value={day5Price != null ? `$${day5Price.toFixed(2)}` : '—'}
           color={C.purple}
           large
         />
@@ -239,7 +239,7 @@ export default function Chart4Report({
             <FileText size={28} className="mx-auto mb-2 opacity-30" />
             <p className="text-sm">Click "Generate Report" to run Module 4.</p>
             <p className="text-xs mt-1 text-gray-400">
-              Uses claude-sonnet-4-6 · Requires <code className="font-mono">ANTHROPIC_API_KEY</code> in the backend env.
+              Uses GPT-4o · Requires <code className="font-mono">OPENAI_API_KEY</code> in the backend env.
             </p>
           </div>
         )}
@@ -253,21 +253,32 @@ export default function Chart4Report({
         )}
 
         {report && !collapsed && (
-          <div className="space-y-4">
-            {report.split('\n\n').filter(Boolean).map((para, i) => {
-              // Bold section headers (PERFORMANCE / ANOMALIES / OUTLOOK or ## headers)
-              const isHeader = /^(#{1,3}\s+|PERFORMANCE|ANOMALIES|OUTLOOK)/i.test(para.trim())
-              if (isHeader) {
-                const clean = para.replace(/^#{1,3}\s+/, '').trim()
+          <div className="space-y-1">
+            {report.split('\n').filter(line => line.trim()).map((line, i) => {
+              const t = line.trim()
+              // Section header: PERFORMANCE:, ANOMALIES:, OUTLOOK:
+              if (/^(PERFORMANCE|ANOMALIES|OUTLOOK)[:\s]/i.test(t)) {
                 return (
-                  <p key={i} className="text-xs font-bold text-gray-500 uppercase tracking-widest mt-2">
-                    {clean}
+                  <p key={i} className="text-xs font-bold text-gray-400 uppercase tracking-widest mt-4 first:mt-0">
+                    {t.replace(/^#{1,3}\s*/, '')}
                   </p>
                 )
               }
+              // Bullet line
+              if (t.startsWith('•') || t.startsWith('-')) {
+                return (
+                  <div key={i} className="flex items-start gap-2 pl-1">
+                    <span className="text-gray-400 mt-0.5 shrink-0 text-xs">•</span>
+                    <p className="text-sm text-gray-700 leading-relaxed">
+                      {t.replace(/^[•\-]\s*/, '')}
+                    </p>
+                  </div>
+                )
+              }
+              // Plain paragraph
               return (
                 <p key={i} className="text-sm text-gray-700 leading-relaxed">
-                  {para}
+                  {t}
                 </p>
               )
             })}

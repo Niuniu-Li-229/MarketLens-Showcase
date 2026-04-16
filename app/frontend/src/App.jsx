@@ -17,6 +17,7 @@ export default function App() {
   const [forecast, setForecast] = useState(null)
   const [loading,  setLoading]  = useState(false)
   const [error,    setError]    = useState(null)
+  const [forecast, setForecast] = useState(null)
 
   const handleAnalyze = async (e) => {
     e?.preventDefault()
