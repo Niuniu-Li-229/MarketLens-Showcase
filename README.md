@@ -1,7 +1,7 @@
 # MarketLens
 
 > **"Markets don't move in a vacuum."**
-> An end-to-end stock analysis pipeline with anomaly detection, Transformer forecasting, and Claude AI reports — served as an interactive web application.
+> An end-to-end stock analysis pipeline with anomaly detection, Transformer + TFT forecasting, FinBERT sentiment, and GPT-4o analyst reports — served as an interactive web application.
 
 ---
 
@@ -13,19 +13,19 @@ MarketLens runs a 5-module pipeline on any ticker and date range, then presents 
 |--------|-------------|------------|
 | **Module 1** | Fetches historical prices and news events | yFinance + Finnhub API |
 | **Module 2** | Detects anomalous trading days using 8 detectors (ZScore, Bollinger, Volume, RSI, MACD, Gap, Intraday, Consecutive) with a 2-layer funnel | Custom detector ensemble |
-| **Module 3** | Sentiment analysis on news + Transformer price forecasting | Mock sentiment · PyTorch Transformer |
-| **Module 4** | Generates a three-paragraph analyst report | Claude claude-sonnet-4-6 (Anthropic) |
+| **Module 3** | FinBERT news sentiment + Transformer and TFT price forecasting | FinBERT · PyTorch Transformer · Temporal Fusion Transformer |
+| **Module 4** | Generates a structured bullet-point analyst report | GPT-4o (OpenAI) |
 | **Module 5** | Visualizes all outputs as interactive charts | Recharts (React) |
 
 ---
 
 ## Web dashboard
 
-The dashboard loads progressively in three stages so you see results as quickly as possible:
+The dashboard loads progressively in three stages:
 
-- **Stage 1 — loads automatically** on page open: price chart with MA20/MA60/S&P500 comparison, anomaly detection chart with expandable event list
-- **Stage 2 — on demand (Run Forecast button)**: Transformer actual-vs-predicted chart with directional accuracy and MAE; first run trains the model (~2–4 min), all subsequent runs are instant from disk cache
-- **Stage 3 — on demand (Generate Report button)**: live market metrics (P/E, beta, VIX, analyst rating) + Claude AI analyst report
+- **Stage 1 — loads automatically** on page open: price chart with MA20/MA60/S&P500 comparison, anomaly detection chart with expandable event list, FinBERT sentiment score
+- **Stage 2 — on demand (Run Forecast button)**: Transformer and TFT actual-vs-predicted charts side by side, with directional accuracy and MAE; first run trains the models (~2–4 min), subsequent runs are instant from disk cache
+- **Stage 3 — on demand (Generate Report button)**: live market metrics from Yahoo Finance (P/E, beta, VIX, analyst rating) + GPT-4o analyst report
 
 ---
 
@@ -36,10 +36,11 @@ MarketLens-Showcase/
 ├── models.py                    # Shared data contracts (PricePoint, AnomalyPoint, …)
 ├── module1_data_fetcher.py      # yFinance + Finnhub fetchers with CSV cache
 ├── module2_anomaly_detector.py  # 8-detector funnel anomaly detection
-├── module3_sentiment_lstm.py    # Sentiment analyser + LSTM/Transformer forecasters
-├── module4_claude_report.py     # Claude AI report builder
+├── module3_sentiment_lstm.py    # FinBERT sentiment + Transformer/TFT forecasters
+├── module4_claude_report.py     # GPT-4o report builder
 ├── module5_visualizer.py        # Matplotlib chart generator (CLI use)
-├── main_pipeline.py             # CLI entry point — runs all 5 modules
+├── main_pipeline.py             # CLI entry point — runs all 5 modules end-to-end
+├── warm_up.py                   # Daily data refresh script (run before frontend)
 │
 ├── app/
 │   ├── backend/
@@ -52,7 +53,7 @@ MarketLens-Showcase/
 │       │   └── components/
 │       │       ├── Chart1Price.jsx           # Module 1: price + MA + S&P500 + volume
 │       │       ├── Chart2Anomaly.jsx         # Module 2: anomaly scatter + event list
-│       │       ├── Chart3Forecast.jsx        # Module 3: forecast chart + sentiment
+│       │       ├── Chart3Forecast.jsx        # Module 3: Transformer + TFT + sentiment
 │       │       └── Chart4Report.jsx          # Module 4: market metrics + AI report
 │       ├── index.html
 │       ├── package.json
@@ -80,19 +81,19 @@ cd MarketLens-Showcase
 
 ### 2. Create a `.env` file in the project root
 
-```bash
-# Required for Module 4 (AI report)
-ANTHROPIC_API_KEY=your_anthropic_key_here
+```env
+# Required for Module 4 AI report
+OPENAI_API_KEY=your_openai_key_here
 
 # Required for Module 1 news fetching (free tier works)
 FINNHUB_API_KEY=your_finnhub_key_here
 ```
 
 > **Both keys are optional for basic use.**
-> - Without `FINNHUB_API_KEY`: the app runs price + anomaly analysis only (no news context). An alert is shown in the dashboard.
-> - Without `ANTHROPIC_API_KEY`: Stages 1 and 2 work fully; the "Generate Report" button in Stage 3 will return an error.
+> - Without `FINNHUB_API_KEY`: price + anomaly analysis still works; news context and FinBERT sentiment are unavailable. A warning banner is shown in the dashboard.
+> - Without `OPENAI_API_KEY`: Stages 1 and 2 work fully; the "Generate Report" button returns an error.
 >
-> Get a free Finnhub key at [finnhub.io](https://finnhub.io) · Get an Anthropic key at [console.anthropic.com](https://console.anthropic.com)
+> Get a free Finnhub key at [finnhub.io](https://finnhub.io) · Get an OpenAI key at [platform.openai.com](https://platform.openai.com)
 
 ### 3. Install backend dependencies
 
@@ -102,7 +103,7 @@ pip install -r requirements.txt
 cd ../..
 ```
 
-> **Note:** `torch` and `transformers` are large packages (~2 GB). If you only want to run Stage 1 and Stage 3 (price/anomaly/report, no Transformer forecast), you can skip them — the app degrades gracefully.
+> **Note:** `torch` and `transformers` are large packages (~2 GB total). The app degrades gracefully if they are not installed — Stage 2 forecast and FinBERT sentiment will be unavailable, but Stage 1 and Stage 3 continue to work.
 
 ### 4. Install frontend dependencies
 
@@ -114,30 +115,78 @@ cd ../..
 
 ---
 
-## Running the web app
+## Running the system
 
-Open **two terminals**, both starting from the project root (`MarketLens-Showcase/`):
+### Daily workflow
 
-**Terminal 1 — Backend**
+```
+Every day (once):        python warm_up.py
+Then open frontend:      two terminals (backend + frontend)
+```
+
+### Step 1 — Run warm_up (once per day)
+
+`warm_up.py` refreshes all data caches so the frontend loads instantly. It does four things per ticker:
+
+1. **Incremental price fetch** — appends only new trading days (no full re-download)
+2. **Incremental news fetch** — appends only new events from Finnhub
+3. **Full FinBERT sentiment** — scores all news events with no cap; saves result to `data_cache/{TICKER}_sentiment.json`
+4. **Forecast** — trains Transformer + TFT; prompts you to confirm if a cache already exists
+
+```bash
+# Default: refreshes META
+python warm_up.py
+
+# Multiple tickers
+python warm_up.py META AAPL TSLA
+```
+
+Expected output:
+```
+MarketLens warm_up — 2026-04-16
+Tickers: META
+
+────────────────────────────────────────────────────
+  META
+────────────────────────────────────────────────────
+  [Prices] Fetching 2026-04-03 → 2026-04-16 …
+  [Prices] +9 new days appended.
+  [News] Fetching 2026-04-08 → 2026-04-16 …
+  [News] +12 new events appended.
+  [Sentiment] Running full FinBERT on 531 events (no cap) …
+  [Sentiment] bullish (+0.214) — saved to META_sentiment.json
+  [Forecast] Cache already exists for META (2021-01-01 ~ 2026-04-15).
+  Refresh? [y/N]
+```
+
+> **warm_up is not required before every page refresh.** Run it once in the morning. The frontend reads from cache all day and remains fast. Re-run it only when you want fresh data.
+
+---
+
+### Step 2 — Start the backend
+
 ```bash
 cd app/backend
 uvicorn api:app --reload --port 8000
 ```
 
-You should see:
+You should see FinBERT loading at startup (~10–30 s first time):
 ```
-INFO: Uvicorn running on http://127.0.0.1:8000
+[Module 3] Loading FinBERT...
+[Module 3] FinBERT ready.
 INFO: Application startup complete.
 ```
 
 > **Common mistakes:**
-> - Running `uvicorn api:app` from the project root instead of `app/backend/` will fail with "Could not import module api". Make sure you `cd app/backend` first.
-> - If you see "Address already in use", a previous server is still running on port 8000. Kill it first:
->   ```bash
->   lsof -ti :8000 | xargs kill -9
->   ```
+> - Running from the project root instead of `app/backend/` will fail with "Could not import module api". Always `cd app/backend` first.
+> - Port already in use: `lsof -ti :8000 | xargs kill -9`
 
-**Terminal 2 — Frontend**
+---
+
+### Step 3 — Start the frontend
+
+Open a second terminal:
+
 ```bash
 cd app/frontend
 npm run dev
@@ -145,39 +194,56 @@ npm run dev
 
 Then open **http://localhost:5173** in your browser.
 
-The dashboard loads META (2021–2026) automatically. Change the ticker and date range in the control panel and click **Analyze** to explore other stocks.
+The dashboard loads the default ticker (META, 2021 – today) automatically. Change the ticker and date range in the control panel and click **Analyze** to explore other stocks.
+
+> **If the UI looks stale after code changes**, do a hard refresh: `Cmd+Shift+R` (Mac) or `Ctrl+Shift+R` (Windows). If that doesn't help, restart the Vite dev server.
 
 ---
 
-## Performance notes
+## Performance
 
-| Operation | First run | Subsequent runs |
-|-----------|-----------|-----------------|
-| Price + anomaly (Stage 1) | ~5–10 s (yFinance download) | ~2–3 s (CSV cache) |
-| News fetch | ~5 min for 5-year range (Finnhub rate limit) | Instant (CSV cache) |
-| Transformer forecast (Stage 2) | ~2–4 min (model trains from scratch) | Instant (JSON cache) |
-| Claude report (Stage 3) | ~5–10 s (live API call) | N/A (not cached) |
+### warm_up.py (run once per day)
 
-All caches are stored in `data_cache/` (excluded from git). Once a ticker + date range has been run once, all subsequent loads are fast.
+| Step | First run (cold cache) | Subsequent runs |
+|------|------------------------|-----------------|
+| Price fetch | ~5–10 s (yFinance download) | ~5 s (delta only) or instant |
+| News fetch | ~5 min (5-year history, Finnhub rate-limited) | ~10–30 s (delta only) |
+| FinBERT sentiment | **~5–8 min** (14 k events, 877 batches × 0.4 s on CPU) | Instant (JSON cache hit) |
+| Transformer forecast | **~1–3 min** (trains from scratch) | Prompt to skip (instant) |
+| TFT forecast | **~1–3 min** (trains from scratch) | Prompt to skip (instant) |
+| **Total** | **~15–20 min** | **~1–2 min** |
+
+> All estimates are printed to the terminal before each step starts. Actual elapsed time is printed when each step finishes.
+
+### Frontend (after warm_up)
+
+| Operation | After warm_up | Without warm_up (cold) |
+|-----------|--------------|------------------------|
+| Stage 1 — price + anomaly | ~1–2 s (cache) | ~5–10 s (yFinance download) |
+| Stage 1 — FinBERT sentiment | Instant (JSON cache) | ~15–30 s (capped at 150 events) |
+| Stage 2 — Forecast | Instant (JSON cache) | ~2–4 min (trains from scratch) |
+| Stage 3 — GPT-4o report | ~5–10 s (live API) | same |
+| Market metrics | ~2–3 s (live yFinance) | same |
+
+All caches are stored in `data_cache/` (excluded from git).
 
 ---
 
 ## Running the CLI pipeline
 
-To run all 5 modules from the command line (generates PNG charts):
+To run all 5 modules from the command line and generate PNG charts:
 
 ```bash
-# From the project root
 python main_pipeline.py
 ```
 
-Edit the last lines of `main_pipeline.py` to change the ticker and date range:
+Edit the bottom of `main_pipeline.py` to change the ticker and date range:
 
 ```python
 run_pipeline(
     ticker = "META",
     start  = date(2021, 1, 1),
-    end    = date(2026, 4, 5),
+    end    = date(2026, 4, 15),
 )
 ```
 
@@ -187,8 +253,10 @@ run_pipeline(
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /api/analyze/{ticker}?start=&end=` | Stage 1: prices, anomalies, sentiment |
-| `GET /api/forecast/{ticker}?start=&end=` | Stage 2: Transformer forecast (cached) |
-| `GET /api/report/{ticker}?start=&end=` | Stage 3: Claude AI report |
-| `GET /api/market-info/{ticker}` | Live market metrics (P/E, beta, VIX, …) |
+| `GET /api/analyze/{ticker}?start=&end=` | Stage 1: prices, anomalies, FinBERT sentiment |
+| `GET /api/forecast/{ticker}?start=&end=` | Stage 2: Transformer + TFT forecast (disk-cached) |
+| `GET /api/report/{ticker}?start=&end=` | Stage 3: GPT-4o analyst report |
+| `GET /api/market-info/{ticker}` | Live market metrics from Yahoo Finance (P/E, beta, VIX, …) |
 | `GET /health` | Health check |
+
+All `end` parameters default to today's date if omitted.

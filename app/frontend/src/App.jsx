@@ -7,11 +7,14 @@ import Chart4Report   from './components/Chart4Report'
 import { fetchAnalysis } from './data/api'
 
 export default function App() {
+  const today = new Date().toISOString().split('T')[0]
+
   const [ticker,    setTicker]    = useState('META')
   const [startDate, setStartDate] = useState('2021-01-01')
-  const [endDate,   setEndDate]   = useState('2026-04-05')
+  const [endDate,   setEndDate]   = useState(today)
 
   const [analysis, setAnalysis] = useState(null)
+  const [forecast, setForecast] = useState(null)
   const [loading,  setLoading]  = useState(false)
   const [error,    setError]    = useState(null)
 
@@ -20,6 +23,7 @@ export default function App() {
     setLoading(true)
     setError(null)
     setAnalysis(null)
+    setForecast(null)
     try {
       const data = await fetchAnalysis(ticker.trim().toUpperCase(), startDate, endDate)
       setAnalysis(data)
@@ -193,6 +197,7 @@ export default function App() {
                 sentimentScore={analysis.sentiment_score}
                 sentimentLabel={analysis.sentiment_label}
                 eventCount={analysis.events.length}
+                onForecastLoaded={setForecast}
               />
             </section>
 
@@ -209,6 +214,7 @@ export default function App() {
                 anomalyCount={analysis.anomalies.length}
                 sentimentScore={analysis.sentiment_score}
                 sentimentLabel={analysis.sentiment_label}
+                day5Price={forecast?.tft_day5_price ?? forecast?.day5_price ?? null}
               />
             </section>
           </>
