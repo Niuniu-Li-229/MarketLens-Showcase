@@ -455,8 +455,8 @@ _SECTOR_EVENTTYPES: set[EventType] = {
 # Reflects how strongly this type of event typically drives price anomalies.
 _EVENT_IMPORTANCE: dict[EventType, float] = {
     EventType.EARNINGS:   1.00,
-    EventType.LEGAL:      0.85,
-    EventType.REGULATORY: 0.80,
+    EventType.LEGAL:      0.80,
+    EventType.REGULATORY: 0.85,
     EventType.PERSONNEL:  0.75,
     EventType.PRODUCT:    0.70,
     EventType.AI_TECH:    0.65,
@@ -517,13 +517,17 @@ def _classify_market_layer(
 
     Returns: (layer_name, weight)
     """
-    text = (event.title + " " + event.description).lower()
+    headline  = event.title.lower()
+    text      = (event.title + " " + event.description).lower()
 
     # ① Ticker keyword match — ground truth, highest priority
+    # Match against headline only: a keyword buried in the description usually
+    # means the company is mentioned incidentally (e.g. "posted on Instagram"),
+    # not that the article is actually about that company.
     has_ticker_mention = False
     if ticker:
         kws = _TICKER_KEYWORDS.get(ticker.upper(), [])
-        if kws and any(k in text for k in kws):
+        if kws and any(k in headline for k in kws):
             has_ticker_mention = True
 
     # ② yfinance source → always firm

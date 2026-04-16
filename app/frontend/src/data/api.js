@@ -27,10 +27,12 @@ export async function fetchAnalysis(ticker, start, end) {
 }
 
 /**
- * Stage 2 — TransformerForecaster (slow first run, disk-cached thereafter).
+ * Stage 2 — Transformer + TFT forecasters (slow first run, disk-cached thereafter).
  * Returns: { ticker, model_name, day5_price, forecast_5d,
- *             actual[], predicted[], test_dates[],
- *             dir_accuracy, mae, sector_name }
+ *             actual[], predicted[], test_dates[], dir_accuracy, mae, sector_name,
+ *             tft_model_name, tft_day5_price, tft_forecast_5d,
+ *             tft_actual[], tft_predicted[], tft_test_dates[],
+ *             tft_dir_accuracy, tft_mae }
  */
 export async function fetchForecast(ticker, start, end) {
   const params = new URLSearchParams({ start, end })
@@ -38,7 +40,7 @@ export async function fetchForecast(ticker, start, end) {
 }
 
 /**
- * Stage 3 — Claude AI report (on-demand, requires ANTHROPIC_API_KEY in backend env).
+ * Stage 3 — GPT-4o report (on-demand, requires OPENAI_API_KEY in backend env).
  * Returns: { ticker, report }
  */
 export async function fetchReport(ticker, start, end) {
