@@ -34,11 +34,20 @@ from module2_anomaly_detector import (
     GapDetector, IntradayRangeDetector, ConsecutiveMoveDetector,
 )
 from module3_sentiment_lstm import (
-    MockSentimentAnalyzer as SentimentAnalyzer,
+    FinBERTAnalyzer,
+    MockSentimentAnalyzer,
     MockForecaster,
     TransformerForecaster,
     TFTForecaster,
 )
+
+# Load FinBERT once at startup; fall back to mock if transformers not installed.
+try:
+    _sentiment_analyzer = FinBERTAnalyzer()
+except Exception as _e:
+    import warnings
+    warnings.warn(f"[api] FinBERT unavailable ({_e}); falling back to MockSentimentAnalyzer.")
+    _sentiment_analyzer = MockSentimentAnalyzer()
 from module4_claude_report import StandardReportBuilder, ReportGenerator
 
 app = FastAPI(title="MarketLens API", version="2.0.0")
@@ -90,6 +99,21 @@ def _save_forecast_cache(ticker: str, start: date, end: date, data: dict) -> Non
             json.dump(data, f)
     except Exception as e:
         print(f"[Cache] Failed to save forecast: {e}")
+
+def _load_sentiment_cache(ticker: str, end: date) -> tuple[float, str] | None:
+    """Return (score, label) if a warm_up sentiment cache exists and covers end."""
+    path = _CACHE_DIR / f"{ticker.upper()}_sentiment.json"
+    if not path.exists():
+        return None
+    try:
+        with open(path) as f:
+            sc = json.load(f)
+        if sc.get("end", "") >= str(end):
+            print(f"[Sentiment] Cache hit: {sc['label']} ({sc['score']:+.3f})")
+            return sc["score"], sc["label"]
+    except Exception:
+        pass
+    return None
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -205,13 +229,15 @@ def _fetch_prices_and_news(ticker: str, start: date, end: date):
       2. Otherwise fetch from Finnhub (slow on first run), then cache.
       3. If FINNHUB_API_KEY is missing or fetch fails, fall back gracefully.
     """
-    # Check price cache first — YFinancePriceFetcher always re-downloads otherwise
+    # Check price cache — re-fetch if stale (last cached date > 3 days before end)
     _cache = DataCache()
     cached_prices = _cache.load_prices(ticker)
-    if cached_prices:
+    if cached_prices and cached_prices[-1].date >= end - timedelta(days=3):
         prices = [p for p in cached_prices if start <= p.date <= end]
         print(f"[Prices] Cache hit: {len(prices)} days for {ticker}")
     else:
+        if cached_prices:
+            print(f"[Prices] Cache stale (last: {cached_prices[-1].date}, end: {end}), re-fetching…")
         prices = YFinancePriceFetcher().fetch_prices(ticker, start, end)
 
     if not prices:
@@ -242,7 +268,7 @@ def _fetch_prices_and_news(ticker: str, start: date, end: date):
 async def analyze(
     ticker: str,
     start: str = Query(default="2021-01-01", description="Start date YYYY-MM-DD"),
-    end:   str = Query(default="2026-04-15", description="End date YYYY-MM-DD"),
+    end:   str | None = Query(default=None,  description="End date YYYY-MM-DD (defaults to today)"),
 ):
     """
     Stage 1 — fast path.
@@ -251,7 +277,8 @@ async def analyze(
     News falls back gracefully if FINNHUB_API_KEY is not set.
     """
     try:
-        start_d, end_d = _parse_date(start), _parse_date(end)
+        start_d = _parse_date(start)
+        end_d   = _parse_date(end) if end else date.today()
         t = ticker.upper()
 
         prices, events, news_available = _fetch_prices_and_news(t, start_d, end_d)
@@ -259,8 +286,12 @@ async def analyze(
         detector = _make_detector()
         anomalies = detector.detect(prices, events, ticker=t)
 
-        sentiment = SentimentAnalyzer()
-        s_score, s_label = sentiment.analyze(events)
+        # Prefer warm_up full-FinBERT cache; fall back to capped live inference
+        cached_sent = _load_sentiment_cache(t, end_d)
+        if cached_sent:
+            s_score, s_label = cached_sent
+        else:
+            s_score, s_label = _sentiment_analyzer.analyze(events)
 
         closes = [p.close for p in prices]
         ma20   = _rolling_mean(closes, 20)
@@ -294,64 +325,67 @@ async def analyze(
 @app.get("/api/forecast/{ticker}")
 async def forecast(
     ticker: str,
-    start: str = Query(default="2021-01-01"),
-    end:   str = Query(default="2026-04-15"),
+    start: str      = Query(default="2021-01-01"),
+    end:   str|None = Query(default=None),
 ):
     """
     Stage 2 — slow path (30–60 s for multi-year range).
-    Runs TransformerForecaster and caches result to disk keyed by ticker+dates.
+    Runs Transformer + TFT and caches to disk keyed by ticker + last trading day.
     Subsequent calls for the same range are instant.
     """
     try:
-        start_d, end_d = _parse_date(start), _parse_date(end)
+        start_d = _parse_date(start)
+        end_d   = _parse_date(end) if end else date.today()
         t = ticker.upper()
 
-        cached = _load_forecast_cache(t, start_d, end_d)
+        # Load prices first so we can snap the cache key to the last trading day
+        prices, events, _ = _fetch_prices_and_news(t, start_d, end_d)
+        last_trading_day  = prices[-1].date if prices else end_d
+
+        cached = _load_forecast_cache(t, start_d, last_trading_day)
         if cached:
-            print(f"[Forecast] Cache hit: {t} {start_d}~{end_d}")
+            print(f"[Forecast] Cache hit: {t} {start_d}~{last_trading_day}")
             return cached
 
-        prices, events, _ = _fetch_prices_and_news(t, start_d, end_d)
         detector  = _make_detector()
         anomalies = detector.detect(prices, events, ticker=t)
 
-        # Run blocking torch training in threads so the event loop stays free
         loop = asyncio.get_event_loop()
-        tf_model  = TransformerForecaster()
-        tft_model = TFTForecaster()
-        tf_result  = await loop.run_in_executor(
-            None, lambda: tf_model.predict(prices, anomalies, ticker=t)
-        )
-        tft_result = await loop.run_in_executor(
-            None, lambda: tft_model.predict(prices, anomalies, ticker=t)
-        )
+
+        # Transformer
+        tf     = TransformerForecaster()
+        tf_res = await loop.run_in_executor(None, lambda: tf.predict(prices, anomalies, ticker=t))
+
+        # TFT
+        tft     = TFTForecaster()
+        tft_res = await loop.run_in_executor(None, lambda: tft.predict(prices, anomalies, ticker=t))
 
         def _to_list(arr):
-            return arr.tolist() if hasattr(arr, "tolist") else list(arr)
+            if arr is None: return []
+            return [round(float(x), 4) if x is not None else None for x in arr]
 
         data = {
-            "ticker":       t,
+            "ticker":           t,
             # Transformer
-            "model_name":   tf_result.model_name,
-            "day5_price":   tf_result.day5_price,
-            "forecast_5d":  tf_result.forecast_5d,
-            "actual":       _to_list(tf_result.actual),
-            "predicted":    _to_list(tf_result.predicted),
-            "test_dates":   [str(d) for d in tf_result.test_dates],
-            "dir_accuracy": round(tf_result.dir_accuracy, 4),
-            "mae":          round(tf_result.mae, 2),
-            "sector_name":  tf_result.sector_name,
+            "model_name":       tf_res.model_name,
+            "day5_price":       tf_res.day5_price,
+            "forecast_5d":      tf_res.forecast_5d,
+            "actual":           _to_list(tf_res.actual),
+            "predicted":        _to_list(tf_res.predicted),
+            "test_dates":       [str(d) for d in tf_res.test_dates],
+            "dir_accuracy":     round(tf_res.dir_accuracy, 4),
+            "mae":              round(tf_res.mae, 2),
+            "sector_name":      tf_res.sector_name,
             # TFT
-            "tft_model_name":   tft_result.model_name,
-            "tft_day5_price":   tft_result.day5_price,
-            "tft_forecast_5d":  tft_result.forecast_5d,
-            "tft_actual":       _to_list(tft_result.actual),
-            "tft_predicted":    _to_list(tft_result.predicted),
-            "tft_test_dates":   [str(d) for d in tft_result.test_dates],
-            "tft_dir_accuracy": round(tft_result.dir_accuracy, 4),
-            "tft_mae":          round(tft_result.mae, 2),
+            "tft_model_name":   tft_res.model_name,
+            "tft_day5_price":   tft_res.day5_price,
+            "tft_actual":       _to_list(tft_res.actual),
+            "tft_predicted":    _to_list(tft_res.predicted),
+            "tft_test_dates":   [str(d) for d in tft_res.test_dates],
+            "tft_dir_accuracy": round(tft_res.dir_accuracy, 4),
+            "tft_mae":          round(tft_res.mae, 2),
         }
-        _save_forecast_cache(t, start_d, end_d, data)
+        _save_forecast_cache(t, start_d, last_trading_day, data)
         return data
     except HTTPException:
         raise
@@ -362,27 +396,29 @@ async def forecast(
 @app.get("/api/report/{ticker}")
 async def generate_report(
     ticker: str,
-    start: str = Query(default="2021-01-01"),
-    end:   str = Query(default="2026-04-15"),
+    start: str      = Query(default="2021-01-01"),
+    end:   str|None = Query(default=None),
 ):
     """
     Stage 3 — GPT-4o report (on-demand, requires OPENAI_API_KEY).
     Uses cached Transformer day5 price if available, otherwise mock.
     """
     try:
-        start_d, end_d = _parse_date(start), _parse_date(end)
+        start_d = _parse_date(start)
+        end_d   = _parse_date(end) if end else date.today()
         t = ticker.upper()
 
         prices, events, _ = _fetch_prices_and_news(t, start_d, end_d)
         detector  = _make_detector()
         anomalies = detector.detect(prices, events, ticker=t)
 
-        sentiment = SentimentAnalyzer()
-        s_score, s_label = sentiment.analyze(events)
+        cached_sent  = _load_sentiment_cache(t, end_d)
+        s_score, s_label = cached_sent if cached_sent else _sentiment_analyzer.analyze(events)
 
-        cached_fc    = _load_forecast_cache(t, start_d, end_d)
+        last_trading_day = prices[-1].date if prices else end_d
+        cached_fc    = _load_forecast_cache(t, start_d, last_trading_day)
         pred_price   = (
-            cached_fc["day5_price"] if cached_fc
+            cached_fc.get("tft_day5_price") or cached_fc.get("day5_price") if cached_fc
             else MockForecaster().predict(prices, anomalies).day5_price
         )
 
