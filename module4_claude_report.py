@@ -32,10 +32,11 @@ class StandardReportBuilder(PromptBuilder):
     SYSTEM_PROMPT = (
         "You are a senior financial analyst. Write clear, direct reports. "
         "Avoid generic disclaimers. Be specific about events and their likely causes. "
-        "Do NOT use markdown formatting (no **, no ##, no bullet dashes). "
+        "Do NOT use markdown formatting (no **, no ##). "
         "Structure your response with exactly these section labels on their own lines: "
         "PERFORMANCE:, ANOMALIES:, OUTLOOK: "
-        "Each section should be 2-3 plain sentences. No lists. No markdown."
+        "Each section must have exactly 3 bullet lines starting with '• '. "
+        "Each bullet must be a single sentence under 100 characters. No prose paragraphs."
     )
 
     def build(self, result: AnalysisResult) -> str:
@@ -83,16 +84,14 @@ class StandardReportBuilder(PromptBuilder):
 
     def _instruction(self) -> str:
         return (
-            "Write a structured analyst report with exactly 3 sections:\n"
-            "PERFORMANCE: (2-3 sentences on overall return and key drivers)\n"
-            "ANOMALIES: (2-3 sentences on the most significant anomaly events "
-            "and their likely causes — reference the two-tier detection: "
-            "large price moves flagged directly, subtler anomalies confirmed "
-            "by multiple technical indicators)\n"
-            "OUTLOOK: (2-3 sentences on sentiment, model prediction, and "
-            "forward-looking view)\n\n"
-            "Be specific. Reference the events listed above directly. "
-            "Plain text only. No markdown. No bullet points."
+            "Write a structured analyst report with exactly 3 sections.\n"
+            "Each section: the label on its own line, then exactly 3 bullet lines "
+            "starting with '• '. Each bullet is one sentence under 100 characters.\n\n"
+            "PERFORMANCE: (3 bullets on overall return and key drivers)\n"
+            "ANOMALIES: (3 bullets on the most significant anomaly events and their "
+            "likely causes — reference the two-tier detection where relevant)\n"
+            "OUTLOOK: (3 bullets on sentiment, model prediction, and forward-looking view)\n\n"
+            "Be specific. Reference the events listed above. Plain text only. No markdown."
         )
 
 

@@ -25,8 +25,10 @@ const EVENT_COLORS = {
   EARNINGS:   '#16a34a',
   ANALYST:    '#1d4ed8',
   REGULATORY: '#f59e0b',
+  LEGAL:      '#e11d48',
   MACRO:      '#dc2626',
   PRODUCT:    '#7c3aed',
+  AI_TECH:    '#0e7490',
   PERSONNEL:  '#0891b2',
   OTHER:      '#94a3b8',
 }
