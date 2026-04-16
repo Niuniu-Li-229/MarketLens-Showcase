@@ -1,23 +1,11 @@
 """
 main_pipeline.py — Pipeline entry point.
-
-切换模式：只改顶部 import 区域，其他代码不动。
-
-Mock 模式（默认，无需 API key，快速测试）：
-  - PriceFetcher  = MockPriceFetcher
-  - NewsFetcher   = MockNewsFetcher
-  - Forecaster    = MockForecaster
-
-真实模式（需要 API keys）：
-  - PriceFetcher  = YFinancePriceFetcher
-  - NewsFetcher   = FinnhubNewsFetcher
-  - Forecaster    = LSTMForecaster + TransformerForecaster
+Compares Transformer vs TFT using the same 8 anomaly-derived features.
 """
 
 from datetime import date
 from models import AnalysisResult
 
-# ── 当前模式：真实数据 ─────────────────────────────────────────────────────────
 from module1_data_fetcher     import YFinancePriceFetcher   as PriceFetcher
 from module1_data_fetcher     import (
     FinnhubNewsFetcher, AlphaVantageNewsFetcher,
@@ -29,24 +17,10 @@ from module2_anomaly_detector import (
     RSIDetector, MACDDetector,
     GapDetector, IntradayRangeDetector, ConsecutiveMoveDetector,
 )
-from module3_sentiment_lstm   import MockSentimentAnalyzer  as SentimentAnalyzer
-from module3_sentiment_lstm   import LSTMForecaster, TransformerForecaster
+from module3_sentiment_lstm   import FinBERTAnalyzer        as SentimentAnalyzer
+from module3_sentiment_lstm   import TransformerForecaster, TFTForecaster
 from module4_claude_report    import StandardReportBuilder, ReportGenerator
 from module5_visualizer       import generate_all_charts
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ── Mock 模式（注释掉上面，取消注释下面）────────────────────────────────────────
-# from module1_data_fetcher     import MockPriceFetcher       as PriceFetcher
-# from module1_data_fetcher     import MockNewsFetcher        as NewsFetcher
-# from module2_anomaly_detector import FunnelDetector, ZScoreDetector, BollingerDetector
-# from module2_anomaly_detector import VolumeDetector, RSIDetector, MACDDetector
-# from module2_anomaly_detector import GapDetector, IntradayRangeDetector, ConsecutiveMoveDetector
-# from module3_sentiment_lstm   import MockSentimentAnalyzer  as SentimentAnalyzer
-# from module3_sentiment_lstm   import MockForecaster         as LSTMForecaster
-# from module3_sentiment_lstm   import MockForecaster         as TransformerForecaster
-# from module4_claude_report    import StandardReportBuilder, ReportGenerator
-# from module5_visualizer       import generate_all_charts
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 def build_pipeline():
@@ -72,16 +46,16 @@ def build_pipeline():
         IntradayRangeDetector(),
         ConsecutiveMoveDetector(),
     ], min_triggers=2)
-    sentiment  = SentimentAnalyzer()
-    lstm       = LSTMForecaster()
-    tf         = TransformerForecaster()
-    generator  = ReportGenerator(builder=StandardReportBuilder())
-    return price_fetcher, news_fetcher, detector, sentiment, lstm, tf, generator
+    sentiment   = SentimentAnalyzer()
+    transformer = TransformerForecaster()
+    tft         = TFTForecaster()
+    generator   = ReportGenerator(builder=StandardReportBuilder())
+    return price_fetcher, news_fetcher, detector, sentiment, transformer, tft, generator
 
 
 def run_pipeline(ticker: str, start: date, end: date) -> str:
     (price_fetcher, news_fetcher,
-     detector, sentiment, lstm, tf, generator) = build_pipeline()
+     detector, sentiment, transformer, tft, generator) = build_pipeline()
 
     # ── Step 1: Fetch ─────────────────────────────────────────────────────────
     print(f"\n[1] Fetching data for {ticker}...")
@@ -90,28 +64,43 @@ def run_pipeline(ticker: str, start: date, end: date) -> str:
     print(f"    {len(prices)} price points, {len(events)} news events.")
 
     if not prices:
-        raise ValueError(f"No price data for {ticker} ({start} ~ {end}). "
-                         "Check ticker symbol and date range.")
+        raise ValueError(f"No price data for {ticker} ({start}~{end}).")
 
     # ── Step 2: Anomaly detection ─────────────────────────────────────────────
     print(f"\n[2] Detecting anomalies across {len(prices)} trading days...")
     anomalies = detector.detect(prices, events, ticker=ticker)
     print(f"    Found {len(anomalies)} anomalies.")
 
-    # ── Step 3: Sentiment + forecasting ──────────────────────────────────────
+    # ── Step 3: Sentiment ─────────────────────────────────────────────────────
     print(f"\n[3] Analysing sentiment...")
     sentiment_score, sentiment_label = sentiment.analyze(events)
     print(f"    Sentiment: {sentiment_label} ({sentiment_score:+.2f})")
 
-    print(f"\n[3] Training LSTM forecaster...")
-    lstm_result = lstm.predict(prices, anomalies, ticker=ticker)
+    # ── Step 3: Transformer (same features as anomaly detectors) ─────────────
+    print(f"\n[3] Training Transformer (9 features incl. sentiment, seq=20)...")
+    tf_result = transformer.predict(prices, anomalies, ticker=ticker, events=events)
 
-    print(f"\n[3] Training Transformer forecaster...")
-    tf_result = tf.predict(prices, anomalies, ticker=ticker)
+    # ── Step 3: TFT (same features, encoder-decoder architecture) ────────────
+    print(f"\n[3] Training TFT (9 features incl. sentiment, seq=20)...")
+    tft_result = tft.predict(prices, anomalies, ticker=ticker, events=events)
 
-    # Use Transformer Day-5 prediction as the headline predicted price
-    predicted_price = float(tf_result.day5_price)
-    print(f"    Transformer Day-5 prediction: ${predicted_price:.2f}")
+    # ── Print comparison ──────────────────────────────────────────────────────
+    print(f"\n{'─'*50}")
+    print(f"  Model Comparison — {ticker}")
+    print(f"{'─'*50}")
+    print(f"  {'Model':<35} {'MAE':>8}  {'Dir Acc':>8}")
+    print(f"  {'─'*50}")
+    print(f"  {'Transformer (9f, seq=20)':<35} "
+          f"${tf_result.mae:>7.2f}  {tf_result.dir_accuracy:>7.1%}")
+    print(f"  {'TFT (9f, seq=20)':<35} "
+          f"${tft_result.mae:>7.2f}  {tft_result.dir_accuracy:>7.1%}")
+    print(f"{'─'*50}")
+    winner = "TFT" if tft_result.mae < tf_result.mae else "Transformer"
+    improvement = abs(tf_result.mae - tft_result.mae) / max(tf_result.mae, 1e-9) * 100
+    print(f"  Winner by MAE: {winner} ({improvement:.1f}% lower MAE)\n")
+
+    # Use TFT Day-5 as the headline predicted price (better model)
+    predicted_price = float(tft_result.day5_price)
 
     total_return = (
         (prices[-1].close - prices[0].open) / prices[0].open * 100.0
@@ -128,14 +117,14 @@ def run_pipeline(ticker: str, start: date, end: date) -> str:
         sentiment_score = sentiment_score,
         sentiment_label = sentiment_label,
     )
-    print(f"\n    {result}")
+    print(f"    {result}")
 
     # ── Step 4: AI report ─────────────────────────────────────────────────────
     print(f"\n[4] Generating AI report...")
     report = generator.generate(result)
     print(f"\n{'─'*60}\n{report}\n{'─'*60}")
 
-    # ── Step 5: Charts ────────────────────────────────────────────────────────
+    # ── Step 5: Charts (Transformer = lstm_result slot, TFT = tf_result slot) ─
     print(f"\n[5] Generating poster charts...")
     generate_all_charts(
         ticker      = ticker,
@@ -143,8 +132,8 @@ def run_pipeline(ticker: str, start: date, end: date) -> str:
         anomalies   = anomalies,
         result      = result,
         report      = report,
-        lstm_result = lstm_result,
-        tf_result   = tf_result,
+        lstm_result = tf_result,    # left panel  → Transformer
+        tf_result   = tft_result,   # right panel → TFT
     )
 
     return report
@@ -154,5 +143,5 @@ if __name__ == "__main__":
     run_pipeline(
         ticker = "META",
         start  = date(2021, 1, 1),
-        end    = date(2026, 4, 5),
+        end    = date(2026, 4, 15),
     )
