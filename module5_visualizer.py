@@ -264,8 +264,52 @@ def plot_anomaly_chart(prices: list[PricePoint], anomalies: list[AnomalyPoint],
 
 def plot_prediction_chart(lstm_result, tf_result, ticker: str,
                           save_path: str = None) -> str:
-    fig, ax = plt.subplots(1, 1, figsize=(12, 5), facecolor="white")
-    fig.suptitle("MODULE 3 — OUTPUT", fontsize=9, color=GRAY, x=0.01, ha="left")
+    """
+    lstm_result slot → Transformer
+    tf_result slot   → TFT
+    Side-by-side comparison of the two models.
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5), facecolor="white")
+    fig.suptitle("MODULE 3 — OUTPUT  |  Transformer vs TFT",
+                 fontsize=9, color=GRAY, x=0.01, ha="left")
+
+    for ax, res, label in [
+        (ax1, lstm_result, "Transformer"),
+        (ax2, tf_result,   "TFT"),
+    ]:
+        n = min(len(res.actual), len(res.predicted), len(res.test_dates))
+        if n == 0:
+            ax.set_title(f"{ticker} — {label}", fontsize=10,
+                         fontweight="normal", pad=6, loc="left")
+            ax.text(0.5, 0.5, "No data",
+                    transform=ax.transAxes, ha="center", fontsize=9, color=GRAY)
+            ax.axis("off")
+            continue
+        ax.plot(res.test_dates[:n], res.actual[:n],
+                color=BLUE, lw=1.8, label="Actual price")
+        ax.plot(res.test_dates[:n], res.predicted[:n],
+                color=ORANGE, lw=1.5, linestyle="--", label="Prediction")
+        ax.set_title(f"{ticker} — {res.model_name}",
+                     fontsize=10, fontweight="normal", pad=6, loc="left")
+        ax.set_ylabel("Price (USD)", fontsize=9, color=GRAY)
+        ax.tick_params(colors=GRAY, labelsize=7)
+        ax.spines[["top","right"]].set_visible(False)
+        ax.spines[["left","bottom"]].set_color("#e2e8f0")
+        ax.grid(axis="y", color="#f1f5f9", linewidth=0.8)
+        ax.legend(fontsize=8, framealpha=0)
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"${v:.0f}"))
+        ax.tick_params(axis="x", colors=GRAY, labelsize=8)
+        ax.text(0.02, 0.06,
+                f"MAE: ${res.mae:.2f}  |  Dir. acc: {res.dir_accuracy:.1%}",
+                transform=ax.transAxes, fontsize=8.5,
+                color=GRAY, fontweight="bold")
+
+    plt.tight_layout()
+    path = save_path or f"{ticker}_chart3_prediction.png"
+    plt.savefig(path, dpi=150, bbox_inches="tight", facecolor="white")
+    plt.close()
+    print(f"[Visualizer] Saved {path}")
+    return path
 
     res = tf_result
     n   = min(len(res.actual), len(res.predicted), len(res.test_dates))
@@ -293,17 +337,6 @@ def plot_prediction_chart(lstm_result, tf_result, ticker: str,
         ax.legend(fontsize=8, framealpha=0)
         ax.yaxis.set_major_formatter(
             plt.FuncFormatter(lambda v, _: f"${v:.0f}"))
-        ax.tick_params(axis="x", colors=GRAY, labelsize=8)
-
-
-    plt.tight_layout()
-    path = save_path or f"{ticker}_chart3_prediction.png"
-    plt.savefig(path, dpi=150, bbox_inches="tight", facecolor="white")
-    plt.close()
-    print(f"[Visualizer] Saved {path}")
-    return path
-
-
 # ── Chart 4: AI report card ───────────────────────────────────────────────────
 
 def _clean_markdown(text: str) -> str:
