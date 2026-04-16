@@ -62,6 +62,13 @@ function ChartTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null
   const d = payload[0]?.payload
   if (!d) return null
+
+  const events = d.anomaly?.related_events ?? []
+  const top3 = events.slice(0, 3)
+  const typeCounts = {}
+  events.forEach(e => { typeCounts[e.event_type] = (typeCounts[e.event_type] || 0) + 1 })
+  const typeList = Object.keys(typeCounts)
+
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-3 text-xs shadow-lg max-w-xs">
       <p className="text-gray-500 mb-1 font-medium">{fmtDateFull(label)}</p>
@@ -71,7 +78,41 @@ function ChartTooltip({ active, payload, label }) {
           <p className="font-bold mb-1" style={{ color: d.anomaly.is_gain ? C.green : C.red }}>
             ⚡ {d.anomaly.is_gain ? '+' : ''}{d.anomaly.percent_change.toFixed(2)}% anomaly
           </p>
-          <p className="text-gray-500 text-xs leading-snug">{d.anomaly.comment}</p>
+          <p className="text-gray-500 leading-snug">{'Triggered by:' + d.anomaly.comment.split('Triggered by:')[1]?.split(' Related events:')[0]}</p>
+          {events.length > 0 && (
+            <div className="mt-2 pt-2 border-t border-gray-100 space-y-1.5">
+              <div className="flex flex-wrap gap-1 items-center">
+                <span className="text-gray-400 mr-0.5">{events.length} event{events.length !== 1 ? 's' : ''}:</span>
+                {typeList.map(type => (
+                  <span
+                    key={type}
+                    className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
+                    style={{
+                      background: `${EVENT_COLORS[type] || '#94a3b8'}1a`,
+                      color: EVENT_COLORS[type] || '#94a3b8',
+                    }}
+                  >
+                    {typeCounts[type] > 1 ? `${type} ×${typeCounts[type]}` : type}
+                  </span>
+                ))}
+              </div>
+              <p className="text-gray-400 font-semibold">Top 3:</p>
+              {top3.map((e, i) => (
+                <div key={i} className="flex items-start gap-1.5">
+                  <span
+                    className="px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0 mt-0.5"
+                    style={{
+                      background: `${EVENT_COLORS[e.event_type] || '#94a3b8'}1a`,
+                      color: EVENT_COLORS[e.event_type] || '#94a3b8',
+                    }}
+                  >
+                    {e.event_type}
+                  </span>
+                  <p className="text-gray-700 leading-snug">{e.title}</p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
