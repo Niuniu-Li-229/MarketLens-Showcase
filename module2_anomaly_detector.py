@@ -455,8 +455,8 @@ _SECTOR_EVENTTYPES: set[EventType] = {
 # Reflects how strongly this type of event typically drives price anomalies.
 _EVENT_IMPORTANCE: dict[EventType, float] = {
     EventType.EARNINGS:   1.00,
-    EventType.LEGAL:      0.85,
-    EventType.REGULATORY: 0.80,
+    EventType.LEGAL:      0.80,
+    EventType.REGULATORY: 0.85,
     EventType.PERSONNEL:  0.75,
     EventType.PRODUCT:    0.70,
     EventType.AI_TECH:    0.65,

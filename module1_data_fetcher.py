@@ -323,7 +323,7 @@ _EVENT_KEYWORDS: dict[EventType, list[str]] = {
         "copyright", "trademark", "trade secret",
         "appeals court", "supreme court", "federal court",
         "ftc case", "doj case",
-        "consent decree", "plea", "indictment",
+        "consent decree", "guilty plea", "plea deal", "plea bargain", "plea agreement", "indictment",
         "legal action", "legal battle", "legal challenge",
         "break up", "break-up", "breakup", "divestiture",
         "forced to sell", "force sale", "must sell",
