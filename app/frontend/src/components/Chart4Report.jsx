@@ -145,7 +145,12 @@ export default function Chart4Report({
 
       {/* ── Row 2: Market indicators ── */}
       <div>
-        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Market indicators</p>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Market indicators</p>
+          <span className="text-[10px] text-gray-400 bg-gray-50 border border-gray-200 rounded px-1.5 py-0.5">
+            Source: Yahoo Finance · via yfinance
+          </span>
+        </div>
         {mktError && (
           <p className="text-xs text-red-500 mb-2">{mktError}</p>
         )}
@@ -156,27 +161,34 @@ export default function Chart4Report({
         )}
         {mktInfo && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-4">
-            <MktCell label="P/E ratio"
+            <MktCell label="P/E ratio (trailing)"
               value={mktInfo.pe_ratio ? `${mktInfo.pe_ratio}x` : null}
               color={peColor} />
             <MktCell label="Market cap"     value={mktInfo.market_cap}   color={C.blue} />
             <MktCell label="52w position"
               value={mktInfo.week52_position != null ? `${mktInfo.week52_position}% of range` : null}
               color={w52Color} />
-            <MktCell label="Beta"
+            <MktCell label="Beta (5y monthly)"
               value={mktInfo.beta != null ? `${mktInfo.beta}  ${mktInfo.beta > 1.5 ? 'High vol' : mktInfo.beta > 1.0 ? 'Above mkt' : 'Below mkt'}` : null}
               color={betaColor} />
-            <MktCell label="Analyst target"
+            <MktCell label="Analyst target (12-month)"
               value={mktInfo.analyst_target ? `$${mktInfo.analyst_target}${mktInfo.upside != null ? `  ${mktInfo.upside > 0 ? '+' : ''}${mktInfo.upside}% upside` : ''}` : null}
               color={upColor} />
-            <MktCell label="Analyst rating" value={mktInfo.analyst_rating} color={recColor} />
-            <MktCell label="VIX (fear)"
+            <MktCell label="Analyst consensus" value={mktInfo.analyst_rating} color={recColor} />
+            <MktCell label="VIX (fear index)"
               value={mktInfo.vix != null ? `${mktInfo.vix}  ${mktInfo.vix_label}` : null}
               color={vixColor} />
             <MktCell label="vs S&P500 (30d)"
               value={mktInfo.rel_perf_30d != null ? `${mktInfo.rel_perf_30d > 0 ? '+' : ''}${mktInfo.rel_perf_30d}%  rel. perf` : null}
               color={relColor} />
           </div>
+        )}
+        {mktInfo && (
+          <p className="text-[10px] text-gray-400 mt-3 leading-relaxed">
+            P/E and beta from <strong>yfinance</strong> (Yahoo Finance fundamentals) ·
+            Analyst target and consensus from <strong>Wall Street analyst estimates</strong> (12-month horizon) ·
+            VIX from <strong>CBOE ^VIX</strong> · 30d relative performance vs <strong>SPY</strong>
+          </p>
         )}
       </div>
 
