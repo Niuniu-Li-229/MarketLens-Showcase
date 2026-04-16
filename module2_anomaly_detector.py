@@ -517,26 +517,31 @@ def _classify_market_layer(
 
     Returns: (layer_name, weight)
     """
-    headline  = event.title.lower()
-    text      = (event.title + " " + event.description).lower()
+    title_text = event.title.lower()
+    desc_text  = event.description.lower()
+    text       = title_text + " " + desc_text
 
-    # ① Ticker keyword match — ground truth, highest priority
-    # Match against headline only: a keyword buried in the description usually
-    # means the company is mentioned incidentally (e.g. "posted on Instagram"),
-    # not that the article is actually about that company.
-    has_ticker_mention = False
+    # ① Ticker keyword match — title hit = firm; description-only = sector signal
+    ticker_in_title = False
+    ticker_in_desc  = False
     if ticker:
         kws = _TICKER_KEYWORDS.get(ticker.upper(), [])
-        if kws and any(k in headline for k in kws):
-            has_ticker_mention = True
+        if kws:
+            ticker_in_title = any(k in title_text for k in kws)
+            ticker_in_desc  = (not ticker_in_title
+                               and any(k in desc_text for k in kws))
 
     # ② yfinance source → always firm
     if event.source == "yfinance":
         return "firm", 1.0
 
-    # ③ Ticker keyword hit → firm
-    if has_ticker_mention:
+    # ③ Ticker keyword in TITLE → firm (article is about this company)
+    if ticker_in_title:
         return "firm", 1.0
+
+    # ③b Ticker keyword only in description → sector (passing mention, not subject)
+    if ticker_in_desc:
+        return "sector", 0.6
 
     # ④ AV relevance cross-check (never blindly trust AV for firm)
     has_sector = _has_sector_mention(text)

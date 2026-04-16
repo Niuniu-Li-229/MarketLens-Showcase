@@ -116,9 +116,20 @@ class FinBERTAnalyzer(SentimentAnalyzer):
         )
         print("[Module 3] FinBERT ready.")
 
-    def analyze(self, events: list[MarketEvent]) -> tuple[float, str]:
+    MAX_EVENTS = 150  # default cap for live API requests
+
+    def analyze(self, events: list[MarketEvent],
+                max_events: int | None = MAX_EVENTS) -> tuple[float, str]:
+        """
+        Score events with FinBERT.
+        max_events: stride-sample cap (None = no cap, used by warm_up).
+        """
         if not events:
             return 0.0, "neutral"
+        # Stride-sample to stay representative across the full date range
+        if max_events is not None and len(events) > max_events:
+            step   = len(events) / max_events
+            events = [events[int(i * step)] for i in range(max_events)]
         texts   = [(e.description or e.title) for e in events]
         results = self._pipe(texts, batch_size=16)
         scores  = [
