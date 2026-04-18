@@ -24,7 +24,7 @@ MarketLens runs a 5-module pipeline on any ticker and date range, then presents 
 The dashboard loads progressively in three stages:
 
 - **Stage 1 — loads automatically** on page open: price chart with MA20/MA60/S&P500 comparison, anomaly detection chart with expandable event list, FinBERT sentiment score
-- **Stage 2 — on demand (Run Forecast button)**: Transformer and TFT actual-vs-predicted charts side by side, with directional accuracy and MAE; first run trains the models (~2–4 min), subsequent runs are instant from disk cache
+- **Stage 2 — on demand (Run Forecast button)**: Transformer and TFT actual-vs-predicted charts side by side, with directional accuracy and MAE; first run trains the models (~22 min Transformer + ~20 min TFT on CPU), subsequent runs are instant from disk cache
 - **Stage 3 — on demand (Generate Report button)**: live market metrics from Yahoo Finance (P/E, beta, VIX, analyst rating) + GPT-4o analyst report
 
 ---
@@ -143,19 +143,18 @@ python warm_up.py META AAPL TSLA
 
 Expected output:
 ```
-MarketLens warm_up — 2026-04-16
+MarketLens warm_up — 2026-04-17
 Tickers: META
 
 ────────────────────────────────────────────────────
   META
 ────────────────────────────────────────────────────
-  [Prices] Fetching 2026-04-03 → 2026-04-16 …
-  [Prices] +9 new days appended.
-  [News] Fetching 2026-04-08 → 2026-04-16 …
-  [News] +12 new events appended.
-  [Sentiment] Running full FinBERT on 531 events (no cap) …
-  [Sentiment] bullish (+0.214) — saved to META_sentiment.json
-  [Forecast] Cache already exists for META (2021-01-01 ~ 2026-04-15).
+  [Prices] Up to date (last: 2026-04-16)
+  [News] Fetching 2026-04-16 → 2026-04-17 (2 days, ~10s) …
+  [News] +5 new events appended.
+  [Sentiment] Running full FinBERT on 14149 events (885 batches, ~2m 48s estimated) …
+  [Sentiment] neutral (+0.005) — done in 2m 50s, saved to META_sentiment.json
+  [Forecast] Cache already exists for META (2021-01-01 ~ 2026-04-16).
   Refresh? [y/N]
 ```
 
@@ -192,7 +191,7 @@ cd app/frontend
 npm run dev
 ```
 
-Then open **http://localhost:5173** in your browser.
+Then open **http://localhost:5173** in your browser (Vite may use **5174** if 5173 is already in use).
 
 The dashboard loads the default ticker (META, 2021 – today) automatically. Change the ticker and date range in the control panel and click **Analyze** to explore other stocks.
 
@@ -208,10 +207,10 @@ The dashboard loads the default ticker (META, 2021 – today) automatically. Cha
 |------|------------------------|-----------------|
 | Price fetch | ~5–10 s (yFinance download) | ~5 s (delta only) or instant |
 | News fetch | ~5 min (5-year history, Finnhub rate-limited) | ~10–30 s (delta only) |
-| FinBERT sentiment | **~5–8 min** (14 k events, 877 batches × 0.4 s on CPU) | Instant (JSON cache hit) |
-| Transformer forecast | **~1–3 min** (trains from scratch) | Prompt to skip (instant) |
-| TFT forecast | **~1–3 min** (trains from scratch) | Prompt to skip (instant) |
-| **Total** | **~15–20 min** | **~1–2 min** |
+| FinBERT sentiment | **~3 min** (14 k events, 885 batches × 0.19 s on CPU) | Instant (JSON cache hit) |
+| Transformer forecast | **~22 min** (FinBERT re-scores 67k texts + 300 epochs) | Prompt to skip (instant) |
+| TFT forecast | **~20 min** (FinBERT re-scores 67k texts + 50 epochs) | Prompt to skip (instant) |
+| **Total** | **~45 min** | **~1–2 min** |
 
 > All estimates are printed to the terminal before each step starts. Actual elapsed time is printed when each step finishes.
 
