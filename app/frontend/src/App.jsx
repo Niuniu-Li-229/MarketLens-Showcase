@@ -17,7 +17,6 @@ export default function App() {
   const [forecast, setForecast] = useState(null)
   const [loading,  setLoading]  = useState(false)
   const [error,    setError]    = useState(null)
-  const [forecast, setForecast] = useState(null)
 
   const handleAnalyze = async (e) => {
     e?.preventDefault()
@@ -215,7 +214,7 @@ export default function App() {
                 anomalyCount={analysis.anomalies.length}
                 sentimentScore={analysis.sentiment_score}
                 sentimentLabel={analysis.sentiment_label}
-                day5Price={forecast?.tft_day5_price ?? forecast?.day5_price ?? null}
+                day5Price={forecast?.day5_price ?? null}
               />
             </section>
           </>

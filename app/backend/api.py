@@ -287,7 +287,8 @@ async def analyze(
         anomalies = detector.detect(prices, events, ticker=t)
 
         # Prefer warm_up full-FinBERT cache; fall back to capped live inference
-        cached_sent = _load_sentiment_cache(t, end_d)
+        last_trading_day = prices[-1].date if prices else end_d
+        cached_sent = _load_sentiment_cache(t, last_trading_day)
         if cached_sent:
             s_score, s_label = cached_sent
         else:
@@ -412,10 +413,9 @@ async def generate_report(
         detector  = _make_detector()
         anomalies = detector.detect(prices, events, ticker=t)
 
-        cached_sent  = _load_sentiment_cache(t, end_d)
-        s_score, s_label = cached_sent if cached_sent else _sentiment_analyzer.analyze(events)
-
         last_trading_day = prices[-1].date if prices else end_d
+        cached_sent  = _load_sentiment_cache(t, last_trading_day)
+        s_score, s_label = cached_sent if cached_sent else _sentiment_analyzer.analyze(events)
         cached_fc    = _load_forecast_cache(t, start_d, last_trading_day)
         pred_price   = (
             cached_fc.get("tft_day5_price") or cached_fc.get("day5_price") if cached_fc
