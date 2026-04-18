@@ -126,6 +126,10 @@ class FinBERTAnalyzer(SentimentAnalyzer):
             -r["score"] if r["label"] == "negative" else 0.0
             for r in results
         ]
+        for e, s in zip(events, scores):
+            e.sentiment_score = s
+        for e, s in zip(events, scores):
+            e.sentiment_score = s
         avg   = float(np.clip(np.mean(scores), -1.0, 1.0))
         label = "bullish" if avg > 0.1 else "bearish" if avg < -0.1 else "neutral"
         print(f"[Module 3] Sentiment: {label} ({avg:+.3f}) over {len(events)} events.")
@@ -181,6 +185,24 @@ def _build_daily_sentiment(prices, events, window_days=7) -> np.ndarray:
     sentiment_arr = np.zeros(len(prices), dtype=np.float32)
 
     if not all_texts:
+        return sentiment_arr
+
+    # If FinBERTAnalyzer.analyze() already scored these events, reuse scores directly.
+    scored_events = [e for e in events if (e.description or e.title or "").strip()]
+    if scored_events and all(e.sentiment_score is not None for e in scored_events):
+        print(f"[Sentiment] Reusing pre-scored sentiment ({len(all_texts)} texts, "
+              f"{len(prices)} days) — skipping FinBERT re-run.")
+        score_map = {
+            (e.description or e.title or "").strip()[:512]: e.sentiment_score
+            for e in scored_events
+        }
+        day_scores: dict[int, list[float]] = defaultdict(list)
+        for (day_idx, _), text in zip(text_index, all_texts):
+            s = score_map.get(text)
+            if s is not None:
+                day_scores[day_idx].append(s)
+        for day_idx, scores in day_scores.items():
+            sentiment_arr[day_idx] = float(np.clip(np.mean(scores), -1.0, 1.0))
         return sentiment_arr
 
     # FinBERT批量打分
