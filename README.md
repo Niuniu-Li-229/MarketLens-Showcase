@@ -24,7 +24,7 @@ MarketLens runs a 5-module pipeline on any ticker and date range, then presents 
 The dashboard loads progressively in three stages:
 
 - **Stage 1 — loads automatically** on page open: price chart with MA20/MA60/S&P500 comparison, anomaly detection chart with expandable event list, FinBERT sentiment score
-- **Stage 2 — on demand (Run Forecast button)**: Transformer and TFT actual-vs-predicted charts side by side, with directional accuracy and MAE; first run trains the models (~22 min Transformer + ~20 min TFT on CPU), subsequent runs are instant from disk cache
+- **Stage 2 — on demand (Run Forecast button)**: Transformer and TFT actual-vs-predicted charts side by side, with directional accuracy and MAE; first run trains the models (~3 min each on CPU after warm_up), subsequent runs are instant from disk cache
 - **Stage 3 — on demand (Generate Report button)**: live market metrics from Yahoo Finance (P/E, beta, VIX, analyst rating) + GPT-4o analyst report
 
 ---
@@ -208,9 +208,9 @@ The dashboard loads the default ticker (META, 2021 – today) automatically. Cha
 | Price fetch | ~5–10 s (yFinance download) | ~5 s (delta only) or instant |
 | News fetch | ~5 min (5-year history, Finnhub rate-limited) | ~10–30 s (delta only) |
 | FinBERT sentiment | **~3 min** (14 k events, 885 batches × 0.19 s on CPU) | Instant (JSON cache hit) |
-| Transformer forecast | **~22 min** (FinBERT re-scores 67k texts + 300 epochs) | Prompt to skip (instant) |
-| TFT forecast | **~20 min** (FinBERT re-scores 67k texts + 50 epochs) | Prompt to skip (instant) |
-| **Total** | **~45 min** | **~1–2 min** |
+| Transformer forecast | **~3 min** (reuses pre-scored sentiment + 300 epochs) | Prompt to skip (instant) |
+| TFT forecast | **~3 min** (reuses pre-scored sentiment + 50 epochs) | Prompt to skip (instant) |
+| **Total** | **~9 min** | **~1–2 min** |
 
 > All estimates are printed to the terminal before each step starts. Actual elapsed time is printed when each step finishes.
 
