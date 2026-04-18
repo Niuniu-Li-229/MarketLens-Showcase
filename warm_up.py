@@ -19,6 +19,8 @@ import math
 import argparse
 from datetime import date, timedelta
 from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv()
 
 # ── Path setup ────────────────────────────────────────────────────────────────
 ROOT = Path(__file__).parent
@@ -119,12 +121,12 @@ def refresh_news(ticker: str) -> list:
 
 def run_sentiment(ticker: str, events: list, last_date: date) -> tuple[float, str]:
     n_batches = math.ceil(len(events) / 16)
-    est_secs  = math.ceil(n_batches * 0.4)   # ~0.4s per batch on CPU
+    est_secs  = math.ceil(n_batches * 0.19)  # ~0.19s per batch on CPU (measured)
     print(f"  [Sentiment] Running full FinBERT on {len(events)} events "
           f"({n_batches} batches, ~{_fmt(est_secs)} estimated) …")
     t0           = time.time()
     analyzer     = FinBERTAnalyzer()
-    score, label = analyzer.analyze(events, max_events=None)
+    score, label = analyzer.analyze(events)
     elapsed      = time.time() - t0
 
     out = {
@@ -162,14 +164,14 @@ def run_forecast(ticker: str, prices: list, events: list) -> None:
     anomalies = detector.detect(prices, events, ticker=ticker)
     print(f"  [Anomalies] {len(anomalies)} detected.")
 
-    print(f"  [Forecast] Training Transformer (~1-3 min) …")
+    print(f"  [Forecast] Training Transformer (~22 min: FinBERT re-score 67k texts + 300 epochs) …")
     t0     = time.time()
-    tf_res = TransformerForecaster().predict(prices, anomalies, ticker=ticker)
+    tf_res = TransformerForecaster().predict(prices, anomalies, ticker=ticker, events=events)
     print(f"  [Forecast] Transformer done in {_fmt(time.time()-t0)} — day5: ${tf_res.day5_price:.2f}")
 
-    print(f"  [Forecast] Training TFT (~1-3 min) …")
+    print(f"  [Forecast] Training TFT (~20 min: FinBERT re-score 67k texts + 50 epochs) …")
     t0      = time.time()
-    tft_res = TFTForecaster().predict(prices, anomalies, ticker=ticker)
+    tft_res = TFTForecaster().predict(prices, anomalies, ticker=ticker, events=events)
     print(f"  [Forecast] TFT done in {_fmt(time.time()-t0)} — day5: ${tft_res.day5_price:.2f}")
 
     data = {
