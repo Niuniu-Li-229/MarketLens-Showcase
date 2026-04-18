@@ -65,12 +65,17 @@ def _fmt(seconds: float) -> str:
 
 # ── Step 1: Incremental price fetch ───────────────────────────────────────────
 
+def _last_weekday(d: date) -> date:
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
 def refresh_prices(ticker: str) -> list[PricePoint]:
     cache  = DataCache()
     cached = cache.load_prices(ticker)
     today  = date.today()
 
-    if cached and cached[-1].date >= today - timedelta(days=3):
+    if cached and cached[-1].date >= _last_weekday(today - timedelta(days=1)):
         print(f"  [Prices] Up to date (last: {cached[-1].date})")
         return cached
 
