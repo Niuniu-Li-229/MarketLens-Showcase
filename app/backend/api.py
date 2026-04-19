@@ -41,13 +41,16 @@ from module3_sentiment_lstm import (
     TFTForecaster,
 )
 
-# Load FinBERT once at startup; fall back to mock if transformers not installed.
-try:
-    _sentiment_analyzer = FinBERTAnalyzer()
-except Exception as _e:
-    import warnings
-    warnings.warn(f"[api] FinBERT unavailable ({_e}); falling back to MockSentimentAnalyzer.")
+# Load FinBERT unless USE_MOCK_SENTIMENT is set (e.g. on low-memory cloud deployments).
+if os.environ.get("USE_MOCK_SENTIMENT"):
     _sentiment_analyzer = MockSentimentAnalyzer()
+else:
+    try:
+        _sentiment_analyzer = FinBERTAnalyzer()
+    except Exception as _e:
+        import warnings
+        warnings.warn(f"[api] FinBERT unavailable ({_e}); falling back to MockSentimentAnalyzer.")
+        _sentiment_analyzer = MockSentimentAnalyzer()
 from module4_claude_report import StandardReportBuilder, ReportGenerator
 
 app = FastAPI(title="MarketLens API", version="2.0.0")
