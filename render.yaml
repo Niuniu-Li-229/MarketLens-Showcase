@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: marketlens-api
+    runtime: python
+    buildCommand: pip install -r app/backend/requirements.txt
+    rootDir: .
+    startCommand: uvicorn app.backend.api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: FINNHUB_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
