@@ -1,9 +1,9 @@
 {
   "ticker": "META",
   "start": "2021-01-01",
-  "end": "2026-04-17",
-  "score": 0.005,
+  "end": "2026-04-22",
+  "score": 0.006,
   "label": "neutral",
-  "event_count": 14153,
-  "updated_at": "2026-04-18"
+  "event_count": 14318,
+  "updated_at": "2026-04-22"
 }
