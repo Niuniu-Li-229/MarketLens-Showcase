@@ -433,8 +433,9 @@ class LSTMForecaster(PriceForecaster):
         predicted = _inverse_close(pred, scaler, n)
         dir_acc, mae = _compute_metrics(actual, predicted)
 
-        test_start = int(len(features) * 0.85)
-        test_dates = [p.date for p in prices][test_start + self.SEQ_LEN:]
+        # Mirror _make_sequences: sp = int((N-SEQ_LEN)*0.85), so test data starts at sp+SEQ_LEN
+        test_start = int((len(features) - self.SEQ_LEN) * 0.85) + self.SEQ_LEN
+        test_dates = [p.date for p in prices][test_start:]
 
         scaled   = scaler.transform(features)
         forecast = _roll_forecast(model, scaled, self.SEQ_LEN, scaler, n)
@@ -526,8 +527,9 @@ class TransformerForecaster(PriceForecaster):
         predicted = _inverse_close(pred, scaler, n)
         dir_acc, mae = _compute_metrics(actual, predicted)
 
-        test_start = int(len(features) * 0.85)
-        test_dates = [p.date for p in prices][test_start + self.SEQ_LEN:]
+        # Mirror _make_sequences: sp = int((N-SEQ_LEN)*0.85), so test data starts at sp+SEQ_LEN
+        test_start = int((len(features) - self.SEQ_LEN) * 0.85) + self.SEQ_LEN
+        test_dates = [p.date for p in prices][test_start:]
 
         scaled   = scaler.transform(features)
         forecast = _roll_forecast(model, scaled, self.SEQ_LEN, scaler, n)
