@@ -79,7 +79,7 @@ class StandardReportBuilder(PromptBuilder):
             )
         if r.predicted_price is not None:
             price = float(r.predicted_price)
-            parts.append(f"Transformer model predicted next close: ${price:.2f}")
+            parts.append(f"Transformer model Day 5 price prediction: ${price:.2f}")
         return "\n".join(parts) if parts else ""
 
     def _instruction(self) -> str:
@@ -213,8 +213,8 @@ class ReportGenerator:
 
         predicted_str = ""
         if r.predicted_price is not None:
-            predicted_str = (f" The Transformer model predicts the next closing "
-                             f"price at ${float(r.predicted_price):.2f}.")
+            predicted_str = (f" The Transformer model's Day 5 price prediction is "
+                             f"${float(r.predicted_price):.2f}.")
 
         return (
             f"PERFORMANCE:\n"

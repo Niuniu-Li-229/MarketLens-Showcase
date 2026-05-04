@@ -421,7 +421,7 @@ async def generate_report(
         s_score, s_label = cached_sent if cached_sent else _sentiment_analyzer.analyze(events)
         cached_fc    = _load_forecast_cache(t, start_d, last_trading_day)
         pred_price   = (
-            cached_fc.get("tft_day5_price") or cached_fc.get("day5_price") if cached_fc
+            cached_fc.get("day5_price") if cached_fc
             else MockForecaster().predict(prices, anomalies).day5_price
         )
 
