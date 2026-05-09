@@ -17,7 +17,7 @@ pip install torch transformers scikit-learn pytorch-forecasting pytorch-lightnin
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 import numpy as np
-from models import MarketEvent, AnomalyPoint, PricePoint
+from .models import MarketEvent, AnomalyPoint, PricePoint
 
 
 # ── Shared result dataclass ───────────────────────────────────────────────────
@@ -74,7 +74,7 @@ class PriceForecaster(ABC):
 
 class MockSentimentAnalyzer(SentimentAnalyzer):
     def analyze(self, events: list[MarketEvent]) -> tuple[float, str]:
-        from models import EventType
+        from .models import EventType
         if not events:
             return 0.0, "neutral"
         bullish = {EventType.EARNINGS, EventType.ANALYST, EventType.PRODUCT}
@@ -237,7 +237,7 @@ def _build_daily_sentiment(prices, events, window_days=7) -> np.ndarray:
     except Exception as e:
         # 降级：用规则打分
         print(f"[Sentiment] FinBERT failed ({e}), falling back to rule-based scoring.")
-        from models import EventType
+        from .models import EventType
         bullish = {EventType.EARNINGS, EventType.ANALYST, EventType.PRODUCT}
         bearish = {EventType.REGULATORY, EventType.MACRO}
         for i, p in enumerate(prices):

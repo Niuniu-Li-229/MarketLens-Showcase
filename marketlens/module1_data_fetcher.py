@@ -27,10 +27,11 @@ from abc import ABC, abstractmethod
 from datetime import date, timedelta
 from pathlib import Path
 
-from models import PricePoint, MarketEvent, EarningsEvent, EventType
+from .models import PricePoint, MarketEvent, EarningsEvent, EventType
 
 logger   = logging.getLogger(__name__)
-CACHE_DIR = Path(__file__).parent / "data_cache"
+# Cache lives at the repo root (one level above the marketlens/ package).
+CACHE_DIR = Path(__file__).resolve().parent.parent / "data_cache"
 
 
 # ── CSV cache ─────────────────────────────────────────────────────────────────
@@ -1658,7 +1659,7 @@ def _is_relevant(headline: str, description: str, ticker: str) -> bool:
     """Drop articles that don't mention the company by name.
     Uses _TICKER_KEYWORDS from module2 — the single source of truth.
     Falls back to True for tickers not in the list."""
-    from module2_anomaly_detector import _TICKER_KEYWORDS  # lazy import avoids circular dep
+    from .module2_anomaly_detector import _TICKER_KEYWORDS  # lazy import avoids circular dep
     kws = _TICKER_KEYWORDS.get(ticker.upper())
     if not kws:
         return True

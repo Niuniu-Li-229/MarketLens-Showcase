@@ -14,8 +14,11 @@ build/
 venv/
 env/
 
-# Generated chart outputs
+# Generated chart outputs (CLI pipeline writes PNGs to cwd)
 *.png
+# …but commit diagrams and screenshots under docs/
+!docs/*.png
+!docs/screenshots/*.png
 
 # Data cache — committed to repo for warm-start
 # data_cache/

@@ -23,18 +23,19 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Path setup ────────────────────────────────────────────────────────────────
-ROOT = Path(__file__).parent
+# This script lives in <repo>/scripts/ — go one level up for the repo root.
+ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from models import PricePoint
-from module1_data_fetcher import YFinancePriceFetcher, FinnhubNewsFetcher, DataCache
-from module2_anomaly_detector import (
+from marketlens.models import PricePoint
+from marketlens.module1_data_fetcher import YFinancePriceFetcher, FinnhubNewsFetcher, DataCache
+from marketlens.module2_anomaly_detector import (
     FunnelDetector,
     ZScoreDetector, BollingerDetector, VolumeDetector,
     RSIDetector, MACDDetector,
     GapDetector, IntradayRangeDetector, ConsecutiveMoveDetector,
 )
-from module3_sentiment_lstm import FinBERTAnalyzer, TransformerForecaster, TFTForecaster
+from marketlens.module3_sentiment_lstm import FinBERTAnalyzer, TransformerForecaster, TFTForecaster
 
 CACHE_DIR       = ROOT / "data_cache"
 START_DATE      = date(2021, 1, 1)
