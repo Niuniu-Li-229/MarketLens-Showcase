@@ -12,6 +12,12 @@ walk_forward_validation.py — Out-of-sample Walk-Forward Validation
 """
 
 
+import sys
+from pathlib import Path
+# This script lives in <repo>/scripts/ — put the repo root on sys.path so
+# `from marketlens.X import …` resolves when run as `python scripts/walk_forward_validation.py`.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from dotenv import load_dotenv
 load_dotenv()
 import numpy as np
@@ -22,14 +28,14 @@ from sklearn.preprocessing import MinMaxScaler
 import torch
 import torch.nn as nn
 
-from module1_data_fetcher     import YFinancePriceFetcher
-from module1_data_fetcher     import FinnhubNewsFetcher
-from module2_anomaly_detector import (
+from marketlens.module1_data_fetcher     import YFinancePriceFetcher
+from marketlens.module1_data_fetcher     import FinnhubNewsFetcher
+from marketlens.module2_anomaly_detector import (
     FunnelDetector, ZScoreDetector, BollingerDetector,
     VolumeDetector, RSIDetector, MACDDetector,
     GapDetector, IntradayRangeDetector, ConsecutiveMoveDetector,
 )
-from module3_sentiment_lstm import (
+from marketlens.module3_sentiment_lstm import (
     _build_rich_features, _make_sequences, _inverse_close,
     SECTOR_MAP, SECTOR_NAMES,
 )

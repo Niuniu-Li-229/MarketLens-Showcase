@@ -1,261 +1,159 @@
 # MarketLens
 
-> **"Markets don't move in a vacuum."**
-> An end-to-end stock analysis pipeline with anomaly detection, Transformer + TFT forecasting, FinBERT sentiment, and GPT-4o analyst reports — served as an interactive web application.
+> An end-to-end equity analysis pipeline that fuses anomaly detection, FinBERT news sentiment, Transformer + TFT price forecasting, and GPT-4o analyst reports — served as an interactive web app.
+
+![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
+![Node](https://img.shields.io/badge/node-18+-339933.svg)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.6-EE4C2C.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+![Showcase](https://img.shields.io/badge/Northeastern-Spring%202026%20Showcase-c8102e.svg)
 
 ---
+
+<!-- TODO: Add 15-30s demo gif here showing Stage 1 → Stage 2 → Stage 3 loading -->
+
+When something unusual happens to a stock — a 7% gap, a volume spike, a sudden trend break — analysts spend hours stitching the story together: pull the chart, scroll the news feed, eyeball the technicals, write the memo. MarketLens runs that loop end-to-end in one click. Pick a ticker and date range, and the dashboard surfaces the anomalous trading days, links each one to the news that probably caused it, scores market sentiment with a finance-tuned language model, forecasts the next five days with two competing deep-learning architectures, and writes a structured analyst report on top of the result.
+
+## Live demo
+
+**[Try it → MarketLens]([https://[DEPLOYED_URL_PLACEHOmarket-lens-showcase.vercel.appLDER])**
+
+<!-- TODO: Replace with real deployed URL once Vercel (frontend) + Railway (backend) are live -->
+
+| Stage 1 — auto-loaded | Stage 2 — auto-loaded | Stage 3 — on demand | Stage 4 — on demand |
+| --- | --- | --- | --- |
+| ![Dashboard view - price](docs/screenshots/price.png) | ![Dashboard view - anomaly & news](docs/screenshots/news.png) | ![Forecast view](docs/screenshots/forecast.png) | ![Report view](docs/screenshots/report.png) |
+
 
 ## What it does
 
-MarketLens runs a 5-module pipeline on any ticker and date range, then presents the results as an interactive web dashboard.
+- **Data fetcher** — incremental yFinance + Finnhub fetch with CSV cache; appends only new trading days per refresh.
+- **Anomaly detector** — 8-detector funnel with two-tier voting (any ≥5% move flagged immediately; otherwise needs ≥2 detectors agreeing).
+- **Sentiment + forecasting** — FinBERT for finance-tuned sentiment, then Transformer and Temporal Fusion Transformer trained side-by-side on 9 features (8 technical + sentiment).
+- **GPT-4o report generator** — structured 3-section / 3-bullet output with a local fallback if the API call fails.
+- **FastAPI backend + React frontend** — three progressive load stages (auto-loaded Stage 1, on-demand Stage 2 forecast, on-demand Stage 3 report) so first paint stays fast.
 
-| Module | What it does | Technology |
-|--------|-------------|------------|
-| **Module 1** | Fetches historical prices and news events | yFinance + Finnhub API |
-| **Module 2** | Detects anomalous trading days using 8 detectors (ZScore, Bollinger, Volume, RSI, MACD, Gap, Intraday, Consecutive) with a 2-layer funnel | Custom detector ensemble |
-| **Module 3** | FinBERT news sentiment + Transformer and TFT price forecasting | FinBERT · PyTorch Transformer · Temporal Fusion Transformer |
-| **Module 4** | Generates a structured bullet-point analyst report | GPT-4o (OpenAI) |
-| **Module 5** | Visualizes all outputs as interactive charts | Recharts (React) |
+## Results
 
----
+Walk-forward, out-of-sample on **META** (5y train / 6w validation).
 
-## Web dashboard
+| Model | MAE ($) | Directional accuracy | MAPE |
+| --- | --- | --- | --- |
+| Naive (last close) | TODO | TODO | TODO |
+| SMA-5 | TODO | TODO | TODO |
+| SMA-20 | TODO | TODO | TODO |
+| **Transformer (9 feat, seq=20)** | TODO | TODO | TODO |
+| **TFT (9 feat, seq=20, dec=5)** | TODO | TODO | TODO |
 
-The dashboard loads progressively in three stages:
+> <!-- TODO: Run `python scripts/walk_forward_validation.py` and paste the printed MAE / Dir Acc / MAPE for each row. The improvement-vs-best-baseline % is also printed at the bottom of the run. -->
 
-- **Stage 1 — loads automatically** on page open: price chart with MA20/MA60/S&P500 comparison, anomaly detection chart with expandable event list, FinBERT sentiment score
-- **Stage 2 — on demand (Run Forecast button)**: Transformer and TFT actual-vs-predicted charts side by side, with directional accuracy and MAE; first run trains the models (~3 min each on CPU after warm_up), subsequent runs are instant from disk cache
-- **Stage 3 — on demand (Generate Report button)**: live market metrics from Yahoo Finance (P/E, beta, VIX, analyst rating) + GPT-4o analyst report
+## Team
 
----
+| Contributor | Role / Modules owned | LinkedIn |
+| --- | --- | --- |
+| Wanjing Yang | [TODO: e.g., "Anomaly detection + GPT-4o reports"] | [TODO: linkedin url] |
+| [Teammate 2] | [TODO] | [TODO] |
+| [Teammate 3] | [TODO] | [TODO] |
+| [Teammate 4] | [TODO] | [TODO] |
 
-## Project structure
+## Awards
 
-```
-MarketLens-Showcase/
-├── models.py                    # Shared data contracts (PricePoint, AnomalyPoint, …)
-├── module1_data_fetcher.py      # yFinance + Finnhub fetchers with CSV cache
-├── module2_anomaly_detector.py  # 8-detector funnel anomaly detection
-├── module3_sentiment_lstm.py    # FinBERT sentiment + Transformer/TFT forecasters
-├── module4_claude_report.py     # GPT-4o report builder
-├── module5_visualizer.py        # Matplotlib chart generator (CLI use)
-├── main_pipeline.py             # CLI entry point — runs all 5 modules end-to-end
-├── warm_up.py                   # Daily data refresh script (run before frontend)
-│
-├── app/
-│   ├── backend/
-│   │   ├── api.py               # FastAPI backend (4 endpoints)
-│   │   └── requirements.txt     # Python dependencies
-│   └── frontend/
-│       ├── src/
-│       │   ├── App.jsx                       # Root — control panel + layout
-│       │   ├── data/api.js                   # API client
-│       │   └── components/
-│       │       ├── Chart1Price.jsx           # Module 1: price + MA + S&P500 + volume
-│       │       ├── Chart2Anomaly.jsx         # Module 2: anomaly scatter + event list
-│       │       ├── Chart3Forecast.jsx        # Module 3: Transformer + TFT + sentiment
-│       │       └── Chart4Report.jsx          # Module 4: market metrics + AI report
-│       ├── index.html
-│       ├── package.json
-│       └── vite.config.js
-```
+**Northeastern University Spring 2026 Showcase** — [TODO: AWARD_NAME_1] · [TODO: AWARD_NAME_2]
 
 ---
 
-## Setup
+<details>
+<summary><b>Technical deep dive</b> (click to expand)</summary>
 
-> **All commands below are run from the project root (`MarketLens-Showcase/`) unless a `cd` step says otherwise.**
+### 1. Data fetcher
 
-### Prerequisites
+Pulls historical OHLCV from Yahoo Finance and news / corporate events from Finnhub, with optional fallbacks to Alpha Vantage, yfinance events, and a curated event list. Fetches are **incremental** — `warm_up.py` checks the existing CSV cache and only appends new trading days, so the daily refresh costs seconds instead of a full re-download. The composite news fetcher degrades gracefully: if Finnhub is missing or rate-limited, the pipeline still runs on the remaining sources rather than failing.
 
-- Python 3.11+
-- Node.js 18+
-- API keys (see below)
+### 2. Anomaly detector — 8-detector funnel with two-tier strategy
 
-### 1. Clone the repo
+Eight independent detectors (z-score on returns, Bollinger band breaks, RSI, MACD crossover, volume spike, opening gap, intraday range, consecutive same-direction moves) each implement a single `AnomalyDetector` interface. The `FunnelDetector` composes them with a deliberate two-tier rule: **Tier 1** flags any day with |close-to-close %| ≥ 5% immediately (fast path for the obvious moves); **Tier 2** runs the full ensemble and only flags a day if **≥ 2 detectors agree**. The two-tier design is the interesting part — a single detector is too noisy in isolation, but a hard agreement threshold misses the screamingly large moves no one would dispute. Adding a new detector means adding one subclass; the funnel composition stays untouched.
 
-```bash
-git clone <repo-url>
-cd MarketLens-Showcase
-```
+### 3. Sentiment + forecasting — FinBERT × Transformer × TFT
 
-### 2. Create a `.env` file in the project root
+News sentiment is scored with **ProsusAI/finbert** (BERT pretrained on financial text), not a generic LLM — domain-tuned, runs locally on CPU, and costs nothing per call. Daily sentiment is then folded into a 9-feature input vector (8 technical features + 1 sentiment) for two competing forecasters trained side-by-side: a plain **Transformer encoder** (300 epochs, d_model=64, 4 heads, 2 layers, seq_len=20) and a **Temporal Fusion Transformer** (encoder–decoder with Gated Residual Networks, a Variable Selection Network, and multi-head attention; 50 epochs, hidden=64, 5-day decoder). Running both means we can show recruiters the *comparison* and not just the result — and the TFT's Variable Selection Network learns which of the 9 features actually drives the prediction, giving us interpretability the Transformer doesn't.
 
-```env
-# Required for Module 4 AI report
-OPENAI_API_KEY=your_openai_key_here
+Validation is **walk-forward, out-of-sample, with no peeking**: the `MinMaxScaler` is fit on the training window only, and the model rolls one trading day at a time across an unseen 6-week window. We benchmark against three sane baselines (naive last-close, SMA-5, SMA-20) so the reported MAE means something.
 
-# Required for Module 1 news fetching (free tier works)
-FINNHUB_API_KEY=your_finnhub_key_here
-```
+Validation setup:
+- Training window: **2021-01-01 → 2026-02-28** (~5 years, ~1,300 trading days)
+- Validation window: **2026-03-01 → 2026-04-15** (6 weeks, never seen during training or scaler fit)
+- Features: 8 technical (close, return, volume, RSI, MACD, Bollinger, anomaly flag, sector) + 1 daily FinBERT sentiment
+- Baselines compared: Naive (yesterday's close), SMA-5, SMA-20
 
-> **Both keys are optional for basic use.**
-> - Without `FINNHUB_API_KEY`: price + anomaly analysis still works; news context and FinBERT sentiment are unavailable. A warning banner is shown in the dashboard.
-> - Without `OPENAI_API_KEY`: Stages 1 and 2 work fully; the "Generate Report" button returns an error.
->
-> Get a free Finnhub key at [finnhub.io](https://finnhub.io) · Get an OpenAI key at [platform.openai.com](https://platform.openai.com)
+### 4. GPT-4o report generator
 
-### 3. Install backend dependencies
+A `PromptBuilder` abstraction (Standard / Risk variants) packages the `AnalysisResult` into a tightly constrained prompt: exactly three sections (`PERFORMANCE`, `ANOMALIES`, `OUTLOOK`), exactly three bullets each, each bullet under 100 characters, plain text only — no markdown, no hedge words. The structured constraint is what makes the output dashboard-renderable instead of a freeform paragraph. A local fallback report is generated automatically if the OpenAI call fails, so a missing API key downgrades the feature instead of breaking the page.
 
-```bash
-cd app/backend
-pip install -r requirements.txt
-cd ../..
-```
+### 5. FastAPI backend + React frontend
 
-> **Note:** `torch` and `transformers` are large packages (~2 GB total). The app degrades gracefully if they are not installed — Stage 2 forecast and FinBERT sentiment will be unavailable, but Stage 1 and Stage 3 continue to work.
+Four-endpoint FastAPI service (`/api/analyze`, `/api/forecast`, `/api/report`, `/api/market-info`) with disk-cached forecasts in `data_cache/`. The React 19 + Recharts frontend loads in **three progressive stages** — Stage 1 (price + anomalies + sentiment) auto-loads in 1–2 seconds from cache; Stage 2 (forecast charts) and Stage 3 (live market metrics + GPT-4o report) are on-demand button clicks. The split exists because Stage 2 costs ~3 minutes the first time and Stage 3 costs an OpenAI call — neither belongs on first paint.
 
-### 4. Install frontend dependencies
+### Architecture
 
-```bash
-cd app/frontend
-npm install
-cd ../..
-```
+The pipeline at full resolution, including the 8-detector funnel (Layer 1 price gate + Layer 2 agreement vote), the anomaly-event matcher's composite scoring (Relevance / Importance / Direction / Recency), and the Transformer + TFT comparison — alongside the "Retail Investor Today" vs MarketLens framing.
 
----
+![MarketLens architecture](docs/image.png)
 
-## Running the system
+<!-- > Editable source: [`docs/Architecture.drawio`](docs/Architecture.drawio) (open with [draw.io](https://app.diagrams.net/)).
 
-### Daily workflow
+</details>
 
-```
-Every day (once):        python warm_up.py
-Then open frontend:      two terminals (backend + frontend)
-```
+<details>
+<summary><b>Tech stack</b> (click to expand)</summary> -->
 
-### Step 1 — Run warm_up (once per day)
+**ML / AI**
+- PyTorch 2.6 (CPU build) — Transformer encoder, Temporal Fusion Transformer
+- HuggingFace `transformers` + ProsusAI/finbert — domain-tuned sentiment
+- scikit-learn — MinMax scaling, walk-forward splits
+- OpenAI GPT-4o — structured analyst report generation
 
-`warm_up.py` refreshes all data caches so the frontend loads instantly. It does four things per ticker:
+**Backend**
+- FastAPI + Uvicorn — 4-endpoint async API with CORS
+- pandas / numpy — feature engineering and time series handling
+- python-dotenv — env-based secrets
 
-1. **Incremental price fetch** — appends only new trading days (no full re-download)
-2. **Incremental news fetch** — appends only new events from Finnhub
-3. **Full FinBERT sentiment** — scores all news events with no cap; saves result to `data_cache/{TICKER}_sentiment.json`
-4. **Forecast** — trains Transformer + TFT; prompts you to confirm if a cache already exists
+**Frontend**
+- React 19 + Vite — progressive 3-stage dashboard
+- Recharts — anomaly scatter, forecast comparison, sentiment gauge
+- Tailwind CSS — utility styling
+- lucide-react — iconography
 
-```bash
-# Default: refreshes META
-python warm_up.py
+**Data**
+- yfinance — OHLCV + live market metrics (P/E, beta, VIX, analyst rating)
+- Finnhub API — historical news / corporate events (free tier)
+- Alpha Vantage (optional fallback) and a curated `KnownEventsFetcher`
 
-# Multiple tickers
-python warm_up.py META AAPL TSLA
-```
+**Infrastructure**
+- Vercel — frontend (`vercel.json`)
+- Railway — backend (FastAPI service running `uvicorn app.backend.api:app`)
+- CSV / JSON disk cache in `data_cache/` for warm starts
 
-Expected output:
-```
-MarketLens warm_up — 2026-04-17
-Tickers: META
+</details>
 
-────────────────────────────────────────────────────
-  META
-────────────────────────────────────────────────────
-  [Prices] Up to date (last: 2026-04-16)
-  [News] Fetching 2026-04-16 → 2026-04-17 (2 days, ~10s) …
-  [News] +5 new events appended.
-  [Sentiment] Running full FinBERT on 14149 events (885 batches, ~2m 48s estimated) …
-  [Sentiment] neutral (+0.005) — done in 2m 50s, saved to META_sentiment.json
-  [Forecast] Cache already exists for META (2021-01-01 ~ 2026-04-16).
-  Refresh? [y/N]
-```
-
-> **warm_up is not required before every page refresh.** Run it once in the morning. The frontend reads from cache all day and remains fast. Re-run it only when you want fresh data.
-
----
-
-### Step 2 — Start the backend
-
-```bash
-cd app/backend
-uvicorn api:app --reload --port 8000
-```
-
-You should see FinBERT loading at startup (~10–30 s first time):
-```
-[Module 3] Loading FinBERT...
-[Module 3] FinBERT ready.
-INFO: Application startup complete.
-```
-
-> **Common mistakes:**
-> - Running from the project root instead of `app/backend/` will fail with "Could not import module api". Always `cd app/backend` first.
-> - Port already in use: `lsof -ti :8000 | xargs kill -9`
-
----
-
-### Step 3 — Start the frontend
-
-Open a second terminal:
-
-```bash
-cd app/frontend
-npm run dev
-```
-
-Then open **http://localhost:5173** in your browser (Vite may use **5174** if 5173 is already in use).
-
-The dashboard loads the default ticker (META, 2021 – today) automatically. Change the ticker and date range in the control panel and click **Analyze** to explore other stocks.
-
-> **If the UI looks stale after code changes**, do a hard refresh: `Cmd+Shift+R` (Mac) or `Ctrl+Shift+R` (Windows). If that doesn't help, restart the Vite dev server.
-
----
-
-## Performance
-
-### warm_up.py (run once per day)
-
-| Step | First run (cold cache) | Subsequent runs |
-|------|------------------------|-----------------|
-| Price fetch | ~5–10 s (yFinance download) | ~5 s (delta only) or instant |
-| News fetch | ~5 min (5-year history, Finnhub rate-limited) | ~10–30 s (delta only) |
-| FinBERT sentiment | **~3 min** (14 k events, 885 batches × 0.19 s on CPU) | Instant (JSON cache hit) |
-| Transformer forecast | **~3 min** (reuses pre-scored sentiment + 300 epochs) | Prompt to skip (instant) |
-| TFT forecast | **~3 min** (reuses pre-scored sentiment + 50 epochs) | Prompt to skip (instant) |
-| **Total** | **~9 min** | **~1–2 min** |
-
-> All estimates are printed to the terminal before each step starts. Actual elapsed time is printed when each step finishes.
-
-### Frontend (after warm_up)
-
-| Operation | After warm_up | Without warm_up (cold) |
-|-----------|--------------|------------------------|
-| Stage 1 — price + anomaly | ~1–2 s (cache) | ~5–10 s (yFinance download) |
-| Stage 1 — FinBERT sentiment | Instant (JSON cache) | ~15–30 s (capped at 150 events) |
-| Stage 2 — Forecast | Instant (JSON cache) | ~2–4 min (trains from scratch) |
-| Stage 3 — GPT-4o report | ~5–10 s (live API) | same |
-| Market metrics | ~2–3 s (live yFinance) | same |
-
-All caches are stored in `data_cache/` (excluded from git).
-
----
-
-## Running the CLI pipeline
-
-To run all 5 modules from the command line and generate PNG charts:
-
-```bash
-python main_pipeline.py
-```
-
-Edit the bottom of `main_pipeline.py` to change the ticker and date range:
-
-```python
-run_pipeline(
-    ticker = "META",
-    start  = date(2021, 1, 1),
-    end    = date(2026, 4, 15),
-)
-```
-
----
-
-## API endpoints
+<details>
+<summary><b>API endpoints</b> (click to expand)</summary>
 
 | Endpoint | Description |
-|----------|-------------|
+| --- | --- |
 | `GET /api/analyze/{ticker}?start=&end=` | Stage 1: prices, anomalies, FinBERT sentiment |
 | `GET /api/forecast/{ticker}?start=&end=` | Stage 2: Transformer + TFT forecast (disk-cached) |
 | `GET /api/report/{ticker}?start=&end=` | Stage 3: GPT-4o analyst report |
-| `GET /api/market-info/{ticker}` | Live market metrics from Yahoo Finance (P/E, beta, VIX, …) |
+| `GET /api/market-info/{ticker}` | Live market metrics (P/E, beta, VIX, analyst rating) |
 | `GET /health` | Health check |
 
-All `end` parameters default to today's date if omitted.
+`end` defaults to today if omitted.
+
+</details>
+
+## Setup & local development
+
+See [docs/SETUP.md](docs/SETUP.md).
+
+## License
+
+MIT

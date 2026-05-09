@@ -3,24 +3,30 @@ main_pipeline.py — Pipeline entry point.
 Compares Transformer vs TFT using the same 8 anomaly-derived features.
 """
 
-from datetime import date
-from models import AnalysisResult
+import sys
+from pathlib import Path
+# This script lives in <repo>/scripts/ — put the repo root on sys.path so
+# `from marketlens.X import …` resolves when run as `python scripts/main_pipeline.py`.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from module1_data_fetcher     import YFinancePriceFetcher   as PriceFetcher
-from module1_data_fetcher     import (
+from datetime import date
+from marketlens.models import AnalysisResult
+
+from marketlens.module1_data_fetcher     import YFinancePriceFetcher   as PriceFetcher
+from marketlens.module1_data_fetcher     import (
     FinnhubNewsFetcher, AlphaVantageNewsFetcher,
     YFinanceEventsFetcher, KnownEventsFetcher, CompositeNewsFetcher,
 )
-from module2_anomaly_detector import (
+from marketlens.module2_anomaly_detector import (
     FunnelDetector,
     ZScoreDetector, BollingerDetector, VolumeDetector,
     RSIDetector, MACDDetector,
     GapDetector, IntradayRangeDetector, ConsecutiveMoveDetector,
 )
-from module3_sentiment_lstm   import FinBERTAnalyzer        as SentimentAnalyzer
-from module3_sentiment_lstm   import TransformerForecaster, TFTForecaster
-from module4_claude_report    import StandardReportBuilder, ReportGenerator
-from module5_visualizer       import generate_all_charts
+from marketlens.module3_sentiment_lstm   import FinBERTAnalyzer        as SentimentAnalyzer
+from marketlens.module3_sentiment_lstm   import TransformerForecaster, TFTForecaster
+from marketlens.module4_claude_report    import StandardReportBuilder, ReportGenerator
+from marketlens.module5_visualizer       import generate_all_charts
 
 
 def build_pipeline():

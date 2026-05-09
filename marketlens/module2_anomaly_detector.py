@@ -28,7 +28,7 @@ To add a new algorithm: add a new subclass. Never modify existing ones.
 
 from abc import ABC, abstractmethod
 from datetime import date, timedelta
-from models import PricePoint, MarketEvent, AnomalyPoint, EventType
+from .models import PricePoint, MarketEvent, AnomalyPoint, EventType
 
 
 class AnomalyDetector(ABC):

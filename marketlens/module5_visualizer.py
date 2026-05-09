@@ -17,7 +17,7 @@ import matplotlib.gridspec as gridspec
 import numpy as np
 import pandas as pd
 from datetime import date, timedelta
-from models import PricePoint, AnomalyPoint, AnalysisResult
+from .models import PricePoint, AnomalyPoint, AnalysisResult
 
 # ── Colour palette ─────────────────────────────────────────────────────────────
 BLUE   = "#1d4ed8"

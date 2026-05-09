@@ -14,7 +14,7 @@ import os
 from abc import ABC, abstractmethod
 from openai import OpenAI
 from dotenv import load_dotenv
-from models import AnalysisResult
+from .models import AnalysisResult
 
 load_dotenv()
 

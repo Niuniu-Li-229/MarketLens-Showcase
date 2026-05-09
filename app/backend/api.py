@@ -25,15 +25,15 @@ from fastapi.middleware.cors import CORSMiddleware
 _SHOWCASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, _SHOWCASE_DIR)
 
-from models import AnalysisResult, AnomalyPoint, MarketEvent, PricePoint
-from module1_data_fetcher import YFinancePriceFetcher, FinnhubNewsFetcher, DataCache
-from module2_anomaly_detector import (
+from marketlens.models import AnalysisResult, AnomalyPoint, MarketEvent, PricePoint
+from marketlens.module1_data_fetcher import YFinancePriceFetcher, FinnhubNewsFetcher, DataCache
+from marketlens.module2_anomaly_detector import (
     FunnelDetector,
     ZScoreDetector, BollingerDetector, VolumeDetector,
     RSIDetector, MACDDetector,
     GapDetector, IntradayRangeDetector, ConsecutiveMoveDetector,
 )
-from module3_sentiment_lstm import (
+from marketlens.module3_sentiment_lstm import (
     FinBERTAnalyzer,
     MockSentimentAnalyzer,
     MockForecaster,
@@ -51,7 +51,7 @@ else:
         import warnings
         warnings.warn(f"[api] FinBERT unavailable ({_e}); falling back to MockSentimentAnalyzer.")
         _sentiment_analyzer = MockSentimentAnalyzer()
-from module4_claude_report import StandardReportBuilder, ReportGenerator
+from marketlens.module4_claude_report import StandardReportBuilder, ReportGenerator
 
 app = FastAPI(title="MarketLens API", version="2.0.0")
 
